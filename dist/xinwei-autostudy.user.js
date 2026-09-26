@@ -12,6 +12,11 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @connect      *
+// @connect      api.deepseek.com
+// @connect      api.siliconflow.cn
+// @connect      api.openai.com
+// @connect      html.duckduckgo.com
+// @connect      api.tavily.com
 // @license      MIT
 // @run-at       document-idle
 // ==/UserScript==
@@ -399,7 +404,7 @@ const XIA_AI = {
                     method: 'GET',
                     url: 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query),
                     headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-                    timeout: 15000,
+                    timeout: 8000,
                     onload: (r) => {
                         try {
                             const html = r.responseText || '';
@@ -420,8 +425,8 @@ const XIA_AI = {
                             done(snippets.join('\n').slice(0, maxChars));
                         } catch (e) { XIA_AI.log('检索解析失败: ' + e.message, 'error'); done(''); }
                     },
-                    onerror: () => { XIA_AI.log('检索网络错误', 'error'); done(''); },
-                    ontimeout: () => { XIA_AI.log('检索超时', 'error'); done(''); },
+                    onerror: (e) => { XIA_AI.log('检索网络错误(DDG可能被墙/需代理): ' + (e && e.error ? e.error : ''), 'error'); done(''); },
+                    ontimeout: () => { XIA_AI.log('检索超时(DDG 8s): 已跳过检索直接作答', 'error'); done(''); },
                 });
             }
         } catch (e) { XIA_AI.log('检索异常: ' + e.message, 'error'); done(''); }
@@ -461,10 +466,15 @@ const XIA_AI = {
                     }),
                     timeout: isSubjective ? 30000 : 20000,
                     onload: (res) => {
+                        const status = res.status || res.statusCode;
+                        if (status && status >= 400) {
+                            XIA_AI.log('AI 响应异常 HTTP ' + status + ' -> ' + endpoint + ' | ' + (res.responseText || '').slice(0, 200), 'error');
+                            onResult(null); return;
+                        }
                         try {
                             const data = JSON.parse(res.responseText);
                             const content = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-                            if (!content) { XIA_AI.log('AI 响应异常: ' + res.responseText.slice(0, 200), 'error'); onResult(null); return; }
+                            if (!content) { XIA_AI.log('AI 响应异常(无答案): ' + endpoint + ' | ' + (res.responseText || '').slice(0, 200), 'error'); onResult(null); return; }
                             let answer;
                             if (isSubjective) {
                                 answer = content.trim();
@@ -476,12 +486,12 @@ const XIA_AI = {
                             XIA_AI.log('AI 答案 -> ' + answer.slice(0, 100), 'ok');
                             onResult(answer);
                         } catch (e) {
-                            XIA_AI.log('解析失败: ' + e.message + ' | 原始: ' + (res.responseText || '').slice(0, 200), 'error');
+                            XIA_AI.log('解析失败: 端点=' + endpoint + ' | ' + e.message + ' | 原始: ' + (res.responseText || '').slice(0, 200), 'error');
                             onResult(null);
                         }
                     },
-                    onerror: (e) => { XIA_AI.log('网络错误: ' + (e.error || JSON.stringify(e)), 'error'); onResult(null); },
-                    ontimeout: () => { XIA_AI.log('请求超时', 'error'); onResult(null); },
+                    onerror: (e) => { XIA_AI.log('网络错误(发送失败): 端点=' + endpoint + ' | 原因=' + (e && e.error ? e.error : JSON.stringify(e)), 'error'); onResult(null); },
+                    ontimeout: () => { XIA_AI.log('请求超时(>' + (isSubjective ? 30 : 20) + 's): ' + endpoint, 'error'); onResult(null); },
                 });
             } catch (e) {
                 XIA_AI.log('LLM 请求异常: ' + e.message, 'error');

@@ -12,6 +12,11 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @connect      *
+// @connect      api.deepseek.com
+// @connect      api.siliconflow.cn
+// @connect      api.openai.com
+// @connect      html.duckduckgo.com
+// @connect      api.tavily.com
 // @license      MIT
 // @run-at       document-idle
 // ==/UserScript==
