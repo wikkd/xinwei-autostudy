@@ -136,6 +136,7 @@ function buildPanel() {
       <span style="font-size:12px;color:#374151;font-weight:600;">自动答题+跳题</span>
     </div>
     <button class="xa-btn xa-start" id="xa-test-grab">🧪 一键抓取当前题目测试</button>
+    <button class="xa-btn" id="xa-diagnose">🩺 诊断当前页面结构</button>
   </div>
   <!-- Tab 3: 关于 -->
   <div class="xa-tab-pane" data-pane="about">
@@ -304,6 +305,9 @@ function bindUI() {
 
     // 测试按钮
     $('#xa-test-grab').addEventListener('click', () => { XIA_AI.testGrab(); });
+
+    // 诊断按钮（dump 页面真实题目 DOM，便于按真机结构修选择器）
+    $('#xa-diagnose').addEventListener('click', () => { XIA_AI.diagnose(); });
 
     // 静音按钮
     const muteBtn = $('.xa-mute');

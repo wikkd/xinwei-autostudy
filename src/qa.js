@@ -31,8 +31,20 @@ function clickNextQuestionButton() {
 const XIA_QROOT = '.homework-single-selected, .homework-multiple-selected, .homework-true-or-false, .homework-cloze, .homework-question-editor';
 
 function xiaQuestionRoot() {
-    const roots = Array.prototype.slice.call(document.querySelectorAll(XIA_QROOT))
+    let roots = Array.prototype.slice.call(document.querySelectorAll(XIA_QROOT))
         .filter(el => visible(el) && el.offsetHeight > 8);
+
+    // 兜底：.question-tag-score 是各题型组件共有的作用域标记，取其容器作为题目块
+    if (roots.length === 0) {
+        const seen = [];
+        document.querySelectorAll('.question-tag-score').forEach(tag => {
+            const box = tag.closest('.question-box') || tag.parentElement;
+            if (!box) return;
+            if (!box.querySelector('.topic-title, .subject-title, .el-radio, .el-checkbox, input')) return;
+            if (visible(box) && box.offsetHeight > 8 && seen.indexOf(box) < 0) seen.push(box);
+        });
+        roots = seen;
+    }
     if (roots.length === 0) return null;
     for (const r of roots) if (!xiaIsAnswered(r)) return r; // 优先返回未作答的（列表页自动顺延到下一题）
     return roots[0];
@@ -558,5 +570,34 @@ const XIA_AI = {
         }
         if (conf.apiKey) XIA_AI.log('[测试] 如想让 AI 作答，点击下方"开启自动答题"后重新测试', 'ai');
         else XIA_AI.log('[测试] 未配置 API Key，仅演示抓取', 'error');
+    },
+
+    // 诊断：把当前页面的真实题目 DOM 结构 dump 出来（用于按真机结构修选择器）
+    diagnose() {
+        const out = [];
+        const push = (s) => { out.push(s); XIA_AI.log(s, 'ai'); };
+        push('🩺 诊断 ' + location.href.slice(0, 70));
+        const roots = Array.prototype.slice.call(document.querySelectorAll(XIA_QROOT));
+        push('① .homework-*根=' + roots.length + (roots.length ? '' : ' →走兜底'));
+        roots.slice(0, 5).forEach((r, i) => {
+            push('  [' + i + '] class="' + (r.className || '').slice(0, 60) + '" h=' + r.offsetHeight + ' 类型=' + xiaQuestionType(r));
+        });
+        const tags = document.querySelectorAll('.question-tag-score');
+        push('② .question-tag-score=' + tags.length);
+        if (tags.length) {
+            const p = tags[0].closest('.question-box') || tags[0].parentElement;
+            if (p) push('  兜底容器 class="' + (p.className || '').slice(0, 60) + '" 含题干=' + !!p.querySelector('.topic-title, .subject-title'));
+        }
+        push('③ div.question=' + document.querySelectorAll('div.question').length + '（旧结构，应为0）');
+        push('④ iframe=' + document.querySelectorAll('iframe').length + ' radio=' + document.querySelectorAll('.el-radio').length + ' checkbox=' + document.querySelectorAll('.el-checkbox').length);
+        const root = xiaQuestionRoot();
+        if (!root) { push('❌ 未定位到题目容器'); console.log('[XIA-diagnose]\n' + out.join('\n')); return; }
+        push('⑤ 选中容器 class="' + (root.className || '').slice(0, 60) + '" 类型=' + xiaQuestionType(root) + ' 已答=' + xiaIsAnswered(root));
+        const t = xiaQuestionTitle(root);
+        push('⑥ 题干=' + (t ? t.slice(0, 90) : '(空)'));
+        const opts = xiaExtractOptions(root);
+        push('⑦ 选项=' + opts.length);
+        opts.slice(0, 8).forEach(o => push('  ' + o.letter + ': ' + o.text.slice(0, 45)));
+        console.log('[XIA-diagnose]\n' + out.join('\n'));
     },
 };
