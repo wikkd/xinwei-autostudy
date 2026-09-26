@@ -4,7 +4,7 @@
 let muteEnabled = true;
 
 const CFG = {
-    PPT_TIMEOUT: 60,        // PPT 帧停留多少秒判定为章节完成
+    PPT_DWELL: 5,           // 静态/PPT 课件停留多少秒即视为已观看并跳转（打开即算播放）
     MIN_WATCH: 30,          // 启动后最少观看秒数（防过早跳章）
     COOLDOWN: 15,           // 跳章后冷却秒数
     INTERVAL: 3,            // 主循环 / 题目扫描间隔（秒）

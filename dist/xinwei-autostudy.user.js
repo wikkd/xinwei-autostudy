@@ -24,7 +24,7 @@
 let muteEnabled = true;
 
 const CFG = {
-    PPT_TIMEOUT: 60,        // PPT 帧停留多少秒判定为章节完成
+    PPT_DWELL: 5,           // 静态/PPT 课件停留多少秒即视为已观看并跳转（打开即算播放）
     MIN_WATCH: 30,          // 启动后最少观看秒数（防过早跳章）
     COOLDOWN: 15,           // 跳章后冷却秒数
     INTERVAL: 3,            // 主循环 / 题目扫描间隔（秒）
@@ -1082,9 +1082,16 @@ let tick = 0;
 let consecutiveJumps = 0;
 let mainLoopId = null;
 
-function isPowerPointFrame() {
+// 当前是否处于「静态/PPT 课件」章节：打开即视为已观看，短暂停留后由目录跳下一节。
+// 判定：主内容区没有可见的 <video>（否则交给视频完成逻辑），且存在 PPT/文档类 iframe。
+// 注：iframe 的 src 同源/跨域都可读，无需进入内容文档。
+function isStaticOrPptSection() {
+    for (const v of document.querySelectorAll('video')) {
+        if (visible(v)) return false; // 有可见视频 => 不是静态课件
+    }
     for (const f of document.querySelectorAll('iframe')) {
-        if (f.src && f.src.includes('PowerPointFrame') && visible(f)) return true;
+        const src = (f.src || '').toLowerCase();
+        if (src && /powerpointframe|ppt|slide|preview|doc|courseware|resource|office|viewer/.test(src)) return true;
     }
     return false;
 }
@@ -1098,17 +1105,24 @@ function openSidebarSwitch() {
 function isSectionComplete() {
     const now = Date.now();
     if (now < cooldownUntil) return false;
-    if (now - scriptStart < CFG.MIN_WATCH * 1000) return false;
+
     const active = document.querySelector('li.el-menu-item.is-active');
     if (active) {
         if (active.querySelector('.inProgress-icon, .unStart-icon')) return false;
         const done = active.querySelector('.done-icon, .icon-done, .el-icon-check, .el-icon-circle-check, .el-icon-check-circle, .is-done');
         if (done && visible(done)) { console.log('[芯位] done-icon → 完成'); return true; }
     }
-    if (isPowerPointFrame()) {
+
+    // 静态/PPT 课件：打开即算已观看，停留 PPT_DWELL 秒后跳转（不受 MIN_WATCH 最少观看限制）
+    if (isStaticOrPptSection()) {
         if (pptSince === 0) pptSince = now;
-        if (now - pptSince > CFG.PPT_TIMEOUT * 1000) { console.log('[芯位] PPT停留' + CFG.PPT_TIMEOUT + 's → 完成'); return true; }
-    } else { pptSince = 0; }
+        if (now - pptSince > CFG.PPT_DWELL * 1000) { console.log('[芯位] PPT/静态课件停留' + CFG.PPT_DWELL + 's → 完成'); return true; }
+        return false;
+    }
+    pptSince = 0;
+
+    // 视频完成判定（需满足最少观看时长，防止过早跳章）
+    if (now - scriptStart < CFG.MIN_WATCH * 1000) return false;
     for (const v of document.querySelectorAll('video')) {
         if (!visible(v)) continue;
         if (v.duration > 0 && (v.ended || v.currentTime >= v.duration - 0.5)) { console.log('[芯位] 视频播放完毕 → 完成'); return true; }
