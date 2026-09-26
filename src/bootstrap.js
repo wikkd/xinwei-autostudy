@@ -3,6 +3,9 @@
 if (window.xaScriptLoaded) return;
 window.xaScriptLoaded = true;
 
+// 不在 iframe/子框架内运行（PPT 播放器等子框架也会命中 @match，避免重复注入与空扫描）
+if (window.self !== window.top) return;
+
 loadCfg();
 
 // 构建并挂载 UI

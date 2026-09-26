@@ -213,6 +213,73 @@ function clickNextQuestionButton() {
     }
 }
 
+// ============ 芯位/beeline-ai 真实题目容器检测 ============
+// 平台作业/考试组件根为以下 class（由 _files 分片 CSS 反推得出，静态 HTML 无渲染内容）
+const XIA_QROOT = '.homework-single-selected, .homework-multiple-selected, .homework-true-or-false, .homework-cloze, .homework-question-editor';
+
+function xiaQuestionRoot() {
+    const roots = Array.prototype.slice.call(document.querySelectorAll(XIA_QROOT))
+        .filter(el => visible(el) && el.offsetHeight > 8);
+    if (roots.length === 0) return null;
+    for (const r of roots) if (!xiaIsAnswered(r)) return r; // 优先返回未作答的（列表页自动顺延到下一题）
+    return roots[0];
+}
+
+function xiaQuestionType(root) {
+    if (!root) return 'single';
+    const cls = root.className || '';
+    if (cls.indexOf('homework-multiple-selected') >= 0) return 'multi';
+    if (cls.indexOf('homework-true-or-false') >= 0) return 'bool';
+    if (cls.indexOf('homework-question-editor') >= 0) return 'subjective';
+    if (cls.indexOf('homework-cloze') >= 0) return 'cloze';
+    if (cls.indexOf('homework-single-selected') >= 0) return 'single';
+    if (root.querySelector('.el-checkbox')) return 'multi';
+    if (root.querySelector('.el-radio')) return 'single';
+    return 'single';
+}
+
+function xiaIsAnswered(root) {
+    if (!root) return false;
+    const t = xiaQuestionType(root);
+    if (t === 'subjective') {
+        const ed = root.querySelector('.w-e-text-container [contenteditable="true"], [contenteditable="true"]');
+        return !!(ed && (ed.textContent || '').trim().length > 0);
+    }
+    if (t === 'cloze') {
+        const ins = root.querySelectorAll('input');
+        for (const i of ins) if ((i.value || '').trim()) return true;
+        return false;
+    }
+    return root.querySelector('.el-radio.is-checked, .el-checkbox.is-checked, .is-checked') !== null;
+}
+
+function xiaExtractOptions(root) {
+    const opts = [];
+    const labels = root.querySelectorAll('.el-radio, .el-checkbox');
+    let idx = 0;
+    labels.forEach(label => {
+        if (!visible(label)) return;
+        const n = label.querySelector('.index-name');
+        const nameLetter = n ? (n.textContent || '').trim().match(/[A-H]/) : null;
+        let letter = nameLetter ? nameLetter[0] : String.fromCharCode(65 + idx);
+        const labelEl = label.querySelector('.label, .el-radio__label, .el-checkbox__label');
+        let text = labelEl ? (labelEl.textContent || '').trim() : (label.textContent || '').replace(/^[A-H][\.\．、\:：\s]*/, '').trim();
+        text = text.replace(/\s+/g, ' ').slice(0, 120);
+        if (opts.find(o => o.letter === letter)) letter = String.fromCharCode(65 + opts.length); // 字母重复则按顺序补
+        opts.push({ letter, text, node: label });
+        idx++;
+    });
+    return opts;
+}
+
+function xiaQuestionTitle(root) {
+    const t = root.querySelector('.topic-title, .subject-title, .question, [class*="topic-title"], [class*="subject-title"]');
+    let txt = t ? (t.textContent || '') : (root.textContent || '');
+    txt = (txt || '').replace(/\s+/g, ' ').trim();
+    txt = txt.replace(/^\s*\d+[\.\．、]*/, '').replace(/\s*单选|\s*多选|\s*判断|\s*填空|\s*主观题/g, '').replace(/\s*\d+\s*分\s*/g, '').trim();
+    return txt.slice(0, 400);
+}
+
 const XIA_AI = {
     lastQuestionHash: '',
     answering: false,
@@ -235,118 +302,31 @@ const XIA_AI = {
         console.log('[XIA] ' + msg);
     },
 
-    // 题目抓取（Element UI div.question + el-radio/el-checkbox 专用，带通用兜底）
+    // 题目抓取（芯位/beeline-ai 真实组件：.homework-* 根 + .topic-title 标题 + .el-radio/.el-checkbox 选项）
     grabQuestion() {
         try {
-        const qEl = document.querySelector('div.question');
-        if (qEl && visible(qEl)) {
-            const titleEl = qEl.querySelector('.topic-title, .content .topic-title-box, .content p, .question p');
-            let qText = (titleEl ? (titleEl.textContent || '') : (qEl.textContent || '')).trim().replace(/\s+/g, ' ');
-            qText = qText
-                .replace(/^\s*\d+[\.\.\s、]*/, '')
-                .replace(/\s*单选|\s*多选\s*/g, '')
-                .replace(/\s*\d+\s*分\s*/g, '')
-                .trim();
-            const isMultiTag = qEl.querySelector('.common-duoxuan-tag') !== null;
-            const isSubjectiveTag = qEl.querySelector('.common-zhuguan-tag') !== null;
-            if (isSubjectiveTag && qText) {
-                if (qText.length < 5 || /^主观/.test(qText)) {
-                    const alt = document.querySelector('.topic-title-box, .topic-title, [class*="topic-title-box"]');
-                    if (alt) {
-                        qText = (alt.textContent || '').trim().replace(/\s+/g, ' ');
-                        if (qText) qText = qText.replace(/^\s*\d+[\.\s、]*/, '').trim();
-                    }
-                }
-                if (qText && qText.length > 3) {
-                    return { question: qText.slice(0, 300), options: [], node: qEl, type: 'subjective', raw: qText };
-                }
+            const root = xiaQuestionRoot();
+            if (!root) return null;
+            const type = xiaQuestionType(root);
+            if (type === 'cloze') {
+                XIA_AI.log('检测到填空题，当前版本暂不自动作答（需自由填空）', 'info');
+                return null;
             }
-            const options = [];
-            const group = qEl.querySelector('.el-radio-group, .el-checkbox-group, [class*="radio-group"], [class*="checkbox-group"], [class*="option-group"]') || qEl;
-            group.querySelectorAll('label.el-radio, label.el-checkbox, label').forEach(label => {
-                if (!visible(label)) return;
-                const input = label.querySelector('input[type="radio"], input[type="checkbox"]');
-                const labelEl = label.querySelector('.option-content, .el-radio__label .label, .el-radio__label, .el-checkbox__label, p.label, p');
-                const m = input && input.value ? String(input.value).toUpperCase().match(/[A-H]/) : null;
-                if (!m) return;
-                const letter = m[0];
-                if (options.find(o => o.letter === letter)) return;
-                const text = labelEl ? (labelEl.textContent || '').trim() : (label.textContent || '').replace(/^[A-H][\.\.\s]*/, '').trim();
-                options.push({ letter, text: text.slice(0, 120), node: label });
-            });
-            if (qText && options.length > 0) {
-                const q = qText.replace(/^\s*\d+[\.\.\s、]*/, '').trim().slice(0, 300);
-                return { question: q, options, node: qEl, type: isMultiTag ? 'multi' : 'single', raw: qText };
+            const title = xiaQuestionTitle(root);
+            if (!title || title.length < 3) {
+                console.log('[XIA-grab] 标题过短/为空');
+                return null;
             }
-        }
-
-        // 兜底：从通用容器里猜题目
-        const subjTag = document.querySelector('.common-zhuguan-tag');
-        if (subjTag) {
-            const alt = document.querySelector('.topic-title-box, .topic-title, [class*="topic-title-box"]');
-            let qText = '';
-            if (alt) {
-                qText = (alt.textContent || '').trim().replace(/\s+/g, ' ');
-                qText = qText.replace(/^\s*\d+[\.\s、]*/, '').trim();
+            if (type === 'subjective') {
+                return { question: title, options: [], node: root, type: 'subjective', raw: title };
             }
-            console.log('[XIA-grab] 主观题标题:', qText.slice(0, 80));
-            if (qText && qText.length > 3) {
-                return { question: qText.slice(0, 300), options: [], node: subjTag, type: 'subjective', raw: qText };
+            const options = xiaExtractOptions(root);
+            if (options.length === 0) {
+                XIA_AI.log('抓到题目但无选项: ' + title.slice(0, 60), 'error');
+                return null;
             }
-        }
-
-        const candidates = [];
-        const pushIf = (el) => { if (el && visible(el) && el.offsetHeight > 20) candidates.push(el); };
-        document.querySelectorAll('form, [class*="question"], [class*="quiz"], [class*="Question"], [class*="题目"], [data-question]').forEach(pushIf);
-        document.querySelectorAll('[class*="dialog"], [class*="modal"], [class*="popup"], [role="dialog"]').forEach(dlg => {
-            if (!visible(dlg)) return;
-            dlg.querySelectorAll('p, h1, h2, h3, h4, h5, div').forEach(elm => {
-                if (elm.children.length <= 3 && (elm.textContent || '').trim().length >= 4 && visible(elm)) candidates.push(elm);
-            });
-        });
-        if (candidates.length === 0) return null;
-
-        let bestText = '', bestNode = null, bestScore = 0;
-        for (const el of candidates) {
-            const txt = (el.textContent || '').trim().replace(/\s+/g, ' ');
-            if (txt.length < 6 || txt.length > 800) continue;
-            let score = 0;
-            if (/[?？]/.test(txt)) score += 4;
-            if (/选项|[ABCD][．.\s]|[Aa]\s*\.|[Bb]\s*\./.test(txt)) score += 3;
-            if (/题目|问题|题干|请选择|请回答|单选|多选|判断/.test(txt)) score += 5;
-            if (el.querySelector('input[type="radio"], input[type="checkbox"], button, [role="radio"]')) score += 3;
-            if (score > bestScore) { bestScore = score; bestText = txt; bestNode = el; }
-        }
-        if (!bestText) return null;
-
-        const options = [];
-        bestNode.querySelectorAll('label, [class*="option"], [class*="choice"], [class*="选项"], li, [role="radio"]').forEach(opt => {
-            if (!visible(opt)) return;
-            const txt = (opt.textContent || '').trim().replace(/\s+/g, ' ');
-            if (txt.length < 2) return;
-            const m = txt.match(/^([A-H])[\s\.．、\:：](.+)$/);
-            if (m) {
-                const letter = m[1].toUpperCase();
-                if (!options.find(o => o.letter === letter)) options.push({ letter, text: m[2].trim().slice(0, 120), node: opt });
-            }
-        });
-        if (options.length === 0) {
-            const letters = ['A', 'B', 'C', 'D', 'E', 'F'];
-            bestNode.querySelectorAll('button, span, div, p, label').forEach(opt => {
-                if (!visible(opt)) return;
-                const txt = (opt.textContent || '').trim();
-                for (const letter of letters) {
-                    if (txt === letter || txt.startsWith(letter + '.') || txt.startsWith(letter + '．') || txt.startsWith(letter + ' ')) {
-                        if (!options.find(o => o.letter === letter)) options.push({ letter, text: txt.slice(0, 120), node: opt });
-                    }
-                }
-            });
-        }
-        if (options.length === 0) return null;
-        let qText = bestText;
-        options.forEach(o => { qText = qText.replace(new RegExp(o.letter + '[\s\.．\:：].*?', 'g'), ''); });
-        qText = qText.replace(/\s+/g, ' ').trim().slice(0, 300);
-        return { question: qText, options, node: bestNode, raw: bestText };
+            const qType = (type === 'bool') ? 'single' : type;
+            return { question: title, options, node: root, type: qType, raw: title };
         } catch (e) {
             XIA_AI.log('grabQuestion异常: ' + (e && e.message ? e.message : e), 'error');
             console.log('[XIA-grab] 异常', e);
@@ -535,60 +515,54 @@ const XIA_AI = {
         }
     },
 
-    clickAnswer(letters) {
-        console.log('[XIA-clickAnswer] 开始点击选项:', letters);
-        const qEl = document.querySelector('div.question');
+    clickAnswer(letters, root) {
+        const qEl = root || xiaQuestionRoot();
         if (!qEl) { XIA_AI.log('页面已无题目容器，无法点击', 'error'); return false; }
-        const isMulti = qEl.querySelector('.common-duoxuan-tag') !== null;
+        const isMulti = xiaQuestionType(qEl) === 'multi';
         console.log('[XIA-clickAnswer] 题目类型:', isMulti ? '多选' : '单选');
-        const letterArr = letters.split('');
+        const letterArr = letters.toUpperCase().split('');
         let allOk = true;
+        const labels = Array.prototype.slice.call(qEl.querySelectorAll('.el-radio, .el-checkbox'));
         for (const ch of letterArr) {
-            const labels = qEl.querySelectorAll('label.el-radio, label.el-checkbox');
             let targetLabel = null;
-            labels.forEach(l => {
+            for (const l of labels) {
+                const n = l.querySelector('.index-name');
+                const nameLetter = n ? (n.textContent || '').trim().match(/[A-H]/) : null;
                 const input = l.querySelector('input[type="radio"], input[type="checkbox"]');
-                if (input && String(input.value).toUpperCase() === ch) targetLabel = l;
-            });
-            if (!targetLabel) {
-                const direct = qEl.querySelector(
-                    'input[type="radio"][value="' + ch + '"], input[type="radio"][value="' + ch.toLowerCase() + '"], ' +
-                    'input[type="checkbox"][value="' + ch + '"], input[type="checkbox"][value="' + ch.toLowerCase() + '"]'
-                );
-                if (direct) {
-                    XIA_AI.forceClick(direct);
-                    XIA_AI.log('点击选项(直接input) ' + ch, 'ok');
-                } else {
-                    XIA_AI.log('找不到选项 ' + ch + ' 的DOM节点', 'error');
-                    allOk = false;
-                }
-            } else {
-                if (isMulti) {
-                    XIA_AI.log('多选请使用自动答题模式（已跳过此点击）', 'info');
-                    allOk = false;
-                    continue;
-                }
-                const inner = targetLabel.querySelector('.el-radio__inner, .el-checkbox__inner');
-                if (inner) XIA_AI.forceClick(inner);
-                XIA_AI.forceClick(targetLabel);
-                // 修复：单选也要主动驱动 Vue 的 input/change，确保 v-model 更新
-                const vue = targetLabel.__vue__;
-                if (vue) {
-                    try { vue.$emit('input', ch); } catch (e) {}
-                    try { vue.$emit('change', ch); } catch (e) {}
-                }
-                XIA_AI.log('点击选项 ' + ch, 'ok');
+                const inputLetter = input && input.value ? String(input.value).toUpperCase().match(/[A-H]/) : null;
+                if ((nameLetter && nameLetter[0] === ch) || (inputLetter && inputLetter[0] === ch)) { targetLabel = l; break; }
             }
+            if (!targetLabel) {
+                const pos = ch.charCodeAt(0) - 65;
+                if (labels[pos]) targetLabel = labels[pos]; // 按位置兜底：第 i 个选项 = 字母 A+i
+            }
+            if (!targetLabel) { XIA_AI.log('找不到选项 ' + ch + ' 的DOM节点', 'error'); allOk = false; continue; }
+            if (isMulti) {
+                XIA_AI.log('多选请使用自动答题模式（已跳过此点击）', 'info');
+                allOk = false;
+                continue;
+            }
+            const inner = targetLabel.querySelector('.el-radio__inner, .el-checkbox__inner');
+            if (inner) XIA_AI.forceClick(inner);
+            XIA_AI.forceClick(targetLabel);
+            // 驱动 Vue 的 input/change，确保 v-model 更新
+            const vue = targetLabel.__vue__;
+            if (vue) {
+                try { vue.$emit('input', ch); } catch (e) {}
+                try { vue.$emit('change', ch); } catch (e) {}
+            }
+            XIA_AI.log('点击选项 ' + ch, 'ok');
         }
         return allOk;
     },
 
-    clickMultiAnswer(letters, onDone) {
+    clickMultiAnswer(letters, onDone, root) {
         console.log('[XIA-multi] 开始逐项点击:', letters);
-        const qEl = document.querySelector('div.question');
+        const qEl = root || xiaQuestionRoot();
         if (!qEl) { console.log('[XIA-multi] 无题目容器'); if (onDone) onDone(); return; }
         const letterArr = letters.toUpperCase().split('');
         if (letterArr.length === 0) { if (onDone) onDone(); return; }
+        const labels = Array.prototype.slice.call(qEl.querySelectorAll('.el-radio, .el-checkbox'));
         let idx = 0;
         const step = () => {
             if (idx >= letterArr.length) {
@@ -597,23 +571,30 @@ const XIA_AI = {
                 return;
             }
             const ch = letterArr[idx++];
-            const labels = qEl.querySelectorAll('label.el-radio, label.el-checkbox');
             let found = null;
-            labels.forEach(l => {
+            for (const l of labels) {
+                const n = l.querySelector('.index-name');
+                const nameLetter = n ? (n.textContent || '').trim().match(/[A-H]/) : null;
                 const input = l.querySelector('input[type="radio"], input[type="checkbox"]');
-                if (input && String(input.value).toUpperCase() === ch) found = { label: l, input };
-            });
+                const inputLetter = input && input.value ? String(input.value).toUpperCase().match(/[A-H]/) : null;
+                if ((nameLetter && nameLetter[0] === ch) || (inputLetter && inputLetter[0] === ch)) { found = { label: l, input }; break; }
+            }
+            if (!found) {
+                const pos = ch.charCodeAt(0) - 65;
+                if (labels[pos]) { const li = labels[pos]; found = { label: li, input: li.querySelector('input[type="radio"], input[type="checkbox"]') }; }
+            }
             if (found) {
-                found.input.checked = true;
+                const input = found.input;
+                if (input) { try { input.checked = true; } catch (e) {} }
                 found.label.classList.add('is-checked');
                 const inputWrap = found.label.querySelector('.el-radio__input, .el-checkbox__input');
                 if (inputWrap) inputWrap.classList.add('is-checked');
-                try { found.input.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+                try { if (input) input.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
                 try {
                     const vue = found.label.__vue__;
                     if (vue) {
-                        vue.$emit('input', found.input.type === 'checkbox' ? true : found.input.value);
-                        vue.$emit('change', found.input.type === 'checkbox' ? true : found.input.value);
+                        vue.$emit('input', input && input.type === 'checkbox' ? true : (input && input.value));
+                        vue.$emit('change', input && input.type === 'checkbox' ? true : (input && input.value));
                     }
                 } catch (e) {}
                 XIA_AI.log('多选点击: ' + ch, 'ok');
@@ -682,15 +663,15 @@ const XIA_AI = {
                     });
                     return;
                 }
-                const isMultiNow = document.querySelector('div.question .common-duoxuan-tag') !== null;
-                if (isMultiNow || q.type === 'multi') {
+                const t = xiaQuestionType(q.node);
+                if (t === 'multi') {
                     XIA_AI.clickMultiAnswer(answer, () => {
                         XIA_AI.log('单次答题（多选）完成', 'ok');
                         XIA_AI.answeringOnce = false;
-                    });
+                    }, q.node);
                     return;
                 }
-                XIA_AI.clickAnswer(answer);
+                XIA_AI.clickAnswer(answer, q.node);
             }
             XIA_AI.answeringOnce = false;
         });
@@ -701,17 +682,14 @@ const XIA_AI = {
         if (XIA_AI.answering) { console.log('[XIA-scan] answering=true, 跳过'); return; }
         const q = XIA_AI.grabQuestion();
         if (!q) { console.log('[XIA-scan] grabQuestion()=null'); return; }
-        if (!q.question) { console.log('[XIA-scan] question为空, raw=', (q.raw || '').slice(0, 80)); return; }
+        if (!q.question) { console.log('[XIA-scan] question为空'); return; }
         if (q.type !== 'subjective' && q.options.length === 0) { console.log('[XIA-scan] 选项为0, question=', q.question.slice(0, 60)); return; }
 
         const hash = q.question.slice(0, 100) + '|' + (q.options.length > 0 ? q.options.map(o => o.letter + o.text.slice(0, 30)).join(',') : 'subj');
         if (hash === XIA_AI.lastQuestionHash) { console.log('[XIA-scan] hash去重, 跳过'); return; }
 
-        // 已作答（有选中项 / 主观题已填）：跳到下一题
-        const checked = document.querySelector('div.question input[type="radio"]:checked, div.question input[type="checkbox"]:checked, .el-radio.is-checked, .el-checkbox.is-checked, div.question .is-checked');
-        const subjFilled = q.type === 'subjective' && (document.querySelector('div.w-e-text-container [data-slate-editor]')?.textContent?.trim()?.length > 0);
-        if (checked || subjFilled) {
-            if (q.type === 'multi') { console.log('[XIA-scan] 多选题已有选中项，不自动跳题'); return; }
+        // 已作答（有选中项 / 主观题已填）：跳到下一题（列表页 grabQuestion 会自动落到下一个未答题目）
+        if (xiaIsAnswered(q.node)) {
             const now = Date.now();
             if (XIA_AI._lastNav && (now - XIA_AI._lastNav) < 2500) { console.log('[XIA-scan] 跳题冷却中，跳过'); return; }
             XIA_AI._lastNav = now;
@@ -736,18 +714,18 @@ const XIA_AI = {
                     });
                     return;
                 }
-                const isMultiNow = document.querySelector('div.question .common-duoxuan-tag') !== null;
-                if (isMultiNow || q.type === 'multi') {
+                const t = xiaQuestionType(q.node);
+                if (t === 'multi') {
                     XIA_AI.clickMultiAnswer(answer, () => {
                         XIA_AI.log('多选题答案 ' + answer + ' 已全部点击，1.5s 后跳转下一题', 'ok');
                         setTimeout(() => { clickNextQuestionButton(); XIA_AI.answering = false; }, 1500);
-                    });
+                    }, q.node);
                     return;
                 }
-                XIA_AI.clickAnswer(answer);
+                XIA_AI.clickAnswer(answer, q.node);
                 setTimeout(() => { XIA_AI.lastQuestionHash = ''; }, 500);
             } else {
-                // 修复：AI 未返回答案时重置 hash，允许下一轮重试，避免永久跳过本题
+                // AI 未返回答案时重置 hash，允许下一轮重试，避免永久跳过本题
                 XIA_AI.lastQuestionHash = '';
                 XIA_AI.log('AI 未返回答案，下一轮将重试本题', 'error');
             }
@@ -1240,6 +1218,9 @@ function initPopupAutoReload() {
 // 防重复注入（同一页面脚本可能被加载多次）
 if (window.xaScriptLoaded) return;
 window.xaScriptLoaded = true;
+
+// 不在 iframe/子框架内运行（PPT 播放器等子框架也会命中 @match，避免重复注入与空扫描）
+if (window.self !== window.top) return;
 
 loadCfg();
 
