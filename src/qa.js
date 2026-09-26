@@ -50,6 +50,7 @@ const XIA_AI = {
 
     // 题目抓取（Element UI div.question + el-radio/el-checkbox 专用，带通用兜底）
     grabQuestion() {
+        try {
         const qEl = document.querySelector('div.question');
         if (qEl && visible(qEl)) {
             const titleEl = qEl.querySelector('.topic-title, .content .topic-title-box, .content p, .question p');
@@ -109,7 +110,7 @@ const XIA_AI = {
 
         const candidates = [];
         const pushIf = (el) => { if (el && visible(el) && el.offsetHeight > 20) candidates.push(el); };
-        document.querySelectorAll('form, [class*="question"], [class*="quiz"], [class*="Question"], [class*="题目"], [data-question"]').forEach(pushIf);
+        document.querySelectorAll('form, [class*="question"], [class*="quiz"], [class*="Question"], [class*="题目"], [data-question]').forEach(pushIf);
         document.querySelectorAll('[class*="dialog"], [class*="modal"], [class*="popup"], [role="dialog"]').forEach(dlg => {
             if (!visible(dlg)) return;
             dlg.querySelectorAll('p, h1, h2, h3, h4, h5, div').forEach(elm => {
@@ -159,6 +160,11 @@ const XIA_AI = {
         options.forEach(o => { qText = qText.replace(new RegExp(o.letter + '[\s\.．\:：].*?', 'g'), ''); });
         qText = qText.replace(/\s+/g, ' ').trim().slice(0, 300);
         return { question: qText, options, node: bestNode, raw: bestText };
+        } catch (e) {
+            XIA_AI.log('grabQuestion异常: ' + (e && e.message ? e.message : e), 'error');
+            console.log('[XIA-grab] 异常', e);
+            return null;
+        }
     },
 
     // ==================== 检索增强（答题前先搜资料） ====================
