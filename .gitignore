@@ -1,0 +1,10 @@
+# 项目内部数据（WorkBuddy），不纳入版本库
+.workbuddy/
+
+# 依赖与日志
+node_modules/
+*.log
+.DS_Store
+
+# 本地临时
+tmp/
