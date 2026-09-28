@@ -19,6 +19,7 @@ const OUTPUT = path.join(DIST_DIR, 'xinwei-autostudy.user.js');
 const BODY_ORDER = [
     'config.js',
     'utils.js',
+    'sites.js',
     'qa.js',
     'ui.js',
     'autoplay.js',

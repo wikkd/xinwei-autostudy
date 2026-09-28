@@ -3,10 +3,20 @@
 if (window.xaScriptLoaded) return;
 window.xaScriptLoaded = true;
 
-// 不在 iframe/子框架内运行（PPT 播放器等子框架也会命中 @match，避免重复注入与空扫描）
-if (window.self !== window.top) return;
+// 仅在支持站点运行（芯位 beeline-ai.com / 超星 chaoxing.com）
+if (!XA_SITE) return;
+
+// 子 frame 策略：beeline 不进 iframe；超星仅视频播放器 iframe 需要注入（自动开播 + 完成通知），
+// knowledge/cards 等中间层 iframe 直接跳过
+if (window.self !== window.top) {
+    if (XA_SITE === 'chaoxing' && CX.isVideoIframe()) CX.startVideoFrameLoop();
+    return;
+}
 
 loadCfg();
+
+// 超星学习页：挂视频完成 → 「下一节」的消息监听
+if (XA_SITE === 'chaoxing') CX.bindStudyTop();
 
 // 构建并挂载 UI
 buildPanel();

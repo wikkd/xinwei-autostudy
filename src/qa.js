@@ -239,22 +239,22 @@ const XIA_AI = {
         try { GM_setValue(SK.bank, JSON.stringify(XIA_AI._bank)); } catch (e) {}
     },
 
-    // 抓取当前题目（.homework-* 根 + .topic-title 题干 + .el-radio/.el-checkbox 选项）
+    // 抓取当前题目（经站点适配器：beeline=.homework-* 根 / chaoxing=.TiMu 题块）
     grabQuestion() {
         try {
-            const root = questionRoot();
+            const root = QA.questionRoot();
             if (!root) return null;
-            const type = questionType(root);
-            const title = questionTitle(root);
+            const type = QA.questionType(root);
+            const title = QA.questionTitle(root);
             if (!title || title.length < 3) return null;
-            const score = questionScore(root);
+            const score = QA.questionScore(root);
             if (type === 'subjective') return { question: title, options: [], node: root, type: type, score: score };
             if (type === 'cloze') {
                 const blanks = qsa('input', root).filter(el => visible(el) && !/(radio|checkbox|hidden|file|button|submit)/i.test(el.type)).length;
                 if (!blanks) { XIA_AI.log('检测到填空题但未找到输入框', 'error'); return null; }
                 return { question: title, options: [], node: root, type: type, blanks: blanks, score: score };
             }
-            const options = extractOptions(root);
+            const options = QA.extractOptions(root);
             if (!options.length) { XIA_AI.log('抓到题目但无选项: ' + title.slice(0, 60), 'error'); return null; }
             return { question: title, options: options, node: root, type: (type === 'bool' ? 'single' : type), score: score };
         } catch (e) {
@@ -479,17 +479,18 @@ const XIA_AI = {
     // 按字母逐个点击选项（单选/多选统一入口）：字母定位失败按位置兜底；
     // 多选只点未选中的防误取消；全部点完回调 onDone
     fillChoice(letters, root, onDone) {
-        const qEl = root || questionRoot();
+        const qEl = root || QA.questionRoot();
         if (!qEl) { XIA_AI.log('页面已无题目容器，无法点击', 'error'); if (onDone) onDone(false); return; }
-        const isMulti = questionType(qEl) === 'multi';
-        const labels = qsa('.el-radio, .el-checkbox', qEl);
+        const isMulti = QA.questionType(qEl) === 'multi';
+        const labels = qsa('.el-radio, .el-checkbox', qEl).length ? qsa('.el-radio, .el-checkbox', qEl)
+            : qsa('ul li', qEl).filter(li => QA.letterOf(li) || /^(对|错|正确|错误)/.test(qtext(li))); // chaoxing: ul>li 选项
         const arr = String(letters).toUpperCase().replace(/[^A-H]/g, '').split('');
         let i = 0;
         const step = () => {
             if (i >= arr.length) { if (onDone) onDone(true); return; }
             const ch = arr[i++];
             let hit = null;
-            for (const l of labels) if (letterOf(l) === ch) { hit = l; break; }
+            for (const l of labels) if (QA.letterOf(l) === ch) { hit = l; break; }
             if (!hit) hit = labels[ch.charCodeAt(0) - 65]; // 位置兜底：第 i 个选项 = 字母 A+i
             if (!hit) { XIA_AI.log('找不到选项 ' + ch + ' 的节点', 'error'); step(); return; }
             if (isMulti) {
@@ -497,6 +498,8 @@ const XIA_AI = {
                 const input = hit.querySelector('input[type="radio"], input[type="checkbox"]');
                 if (input && !input.checked) {
                     try { input.click(); } catch (e) { try { XIA_AI.forceClick(hit); } catch (e2) {} }
+                } else if (!input) {
+                    try { XIA_AI.forceClick(hit); } catch (e) {} // chaoxing li 无内部 input
                 }
             } else {
                 const inner = hit.querySelector('.el-radio__inner, .el-checkbox__inner');
@@ -593,7 +596,7 @@ const XIA_AI = {
         setTimeout(() => {
             let ok = false;
             if (q.type === 'cloze') ok = qsa('input', q.node).some(inp => (inp.value || '').trim());
-            else ok = allSelected(q.node, answer);
+            else ok = QA.allSelected(q.node, answer);
             if (XIA_AI._failHash !== hash) XIA_AI._failCount = 0;
             if (ok) {
                 XIA_AI._failHash = '';
@@ -644,35 +647,35 @@ const XIA_AI = {
         XIA_AI.progress('📝 自动提交中…');
         try { btn.click(); } catch (e) {}
         setTimeout(() => {
-            const dlg = qsa('.el-message-box, .el-dialog, .el-popconfirm').find(d => visible(d));
-            if (dlg) {
-                const msgEl = dlg.querySelector('.el-message-box__message, .el-dialog__body') || dlg;
-                const msg = qtextAll(msgEl);
-                if (/未(作答|回答|完成)|尚未(作答|完成)|还有\d*题/.test(msg)) {
+            // 确认弹窗：beeline 为 element-ui 组件；超星为自绘弹层（按 class 模糊匹配）。
+            // 找不到弹层时退化为全页扫「确定/确认/提交」文本按钮。
+            const pops = qsa('.el-message-box, .el-dialog, .el-popconfirm, [class*="dialog"], [class*="popup"], [class*="maskdiv"], [class*="mask_"]').filter(visible);
+            if (pops.length) {
+                const msg = pops.map(d => qtextAll(d)).join(' ');
+                if (/未(作答|回答|完成)|尚未(作答|完成)|还有\d*题|请(先)?(答完|完成所有|作答)/.test(msg)) {
                     XIA_AI.log('平台提示有题目未作答，已取消自动提交，请人工补答', 'error');
-                    const cancel = dlg.querySelector('.el-message-box__btns .el-button:not(.el-button--primary), .el-dialog__footer .el-button:not(.el-button--primary)')
-                        || qsa('button', dlg).find(b => /^(取消|关闭)$/.test(qtextAll(b)));
+                    const cancel = pops.map(d => qsa('button, a, [class*="btn"]', d)).flat()
+                        .filter(visible).find(b => /^(取消|关闭|继续答题)$/.test(qtextAll(b)));
                     try { if (cancel) cancel.click(); } catch (e) {}
                     XIA_AI._submitting = false;
                     return;
                 }
-                const confirm = dlg.querySelector('.el-message-box__btns .el-button--primary, .el-dialog__footer .el-button--primary')
-                    || qsa('button', dlg).find(b => /^(确定|确认|提交)$/.test(qtextAll(b)));
-                if (confirm && !confirm.disabled) {
-                    try { confirm.click(); } catch (e) {}
-                    XIA_AI.log('已点击确认提交', 'ok');
-                } else {
-                    XIA_AI.log('弹窗中未找到确认按钮，请人工提交', 'error');
-                    XIA_AI._submitting = false;
-                    return;
-                }
+            }
+            const scope = pops.length ? pops : [document.body];
+            const confirm = scope.map(d => qsa('button, a, [class*="btn"]', d)).flat()
+                .filter(visible).find(b => /^(确定|确认|提交)$/.test(qtextAll(b)) && !b.disabled);
+            if (confirm) {
+                try { confirm.click(); } catch (e) {}
+                XIA_AI.log('已点击确认提交', 'ok');
             } else {
-                XIA_AI.log('未出现确认弹窗，可能已直接提交', 'info');
+                XIA_AI.log('未找到确认按钮，请人工提交', 'error');
+                XIA_AI._submitting = false;
+                return;
             }
             setTimeout(() => {
-                const toast = qsa('.el-message').map(m => m.textContent || '').join(' ');
-                if (/提交成功|成功/.test(toast)) {
-                    XIA_AI._donePage = location.hash; // 本页已提交完成，交给 walker 接管，不再自动跳题
+                const toast = qsa('.el-message, [class*="toast"], [class*="success"]').map(m => m.textContent || '').join(' ');
+                if (/提交成功|成功/.test(toast) || !qtextAll(document.body).includes('提交作业')) {
+                    XIA_AI._donePage = location.hash + location.pathname; // 本页已提交完成，交给 walker 接管
                     XIA_AI.bump('submitted');
                     XIA_AI.log('🎉 作业提交成功', 'ok');
                     XIA_AI.progress('🎉 提交成功');
@@ -717,7 +720,7 @@ const XIA_AI = {
             return;
         }
         try { if (homeworkWalker()) return; } catch (e) { console.log('[XIA-walker] 异常', e); }
-        if (XIA_AI._donePage && location.hash === XIA_AI._donePage) return; // 本卷刚提交成功，等 walker 接管
+        if (XIA_AI._donePage && (location.hash + location.pathname) === XIA_AI._donePage) return; // 本卷刚提交成功，等 walker 接管
 
         const q = XIA_AI.grabQuestion();
         if (!q || !q.question) return;
@@ -728,7 +731,7 @@ const XIA_AI = {
         if (hash === XIA_AI.lastQuestionHash) return;
 
         // 已作答：跳到下一题（questionRoot 优先返回未答题，此处多为最后一题或翻页失败）
-        if (isAnswered(q.node)) {
+        if (QA.isAnswered(q.node)) {
             const now = Date.now();
             if (XIA_AI._lastNav && now - XIA_AI._lastNav < 2500) return;
             if (XIA_AI._skipHash === hash) XIA_AI._skipCount++;
@@ -803,6 +806,7 @@ const XIA_AI = {
 
     // 🩺 诊断：dump 当前页题目 DOM 结构（平台改版后按真机结构修选择器用）
     diagnose() {
+        if (XA_SITE === 'chaoxing') { CXQA.diagnose(); return; }
         const out = [];
         const push = s => { out.push(s); XIA_AI.log(s, 'ai'); };
         push('🩺 诊断 ' + location.href.slice(0, 70));
