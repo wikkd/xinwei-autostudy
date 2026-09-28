@@ -8,3 +8,4 @@ node_modules/
 
 # 本地临时
 tmp/
+*.ps1
