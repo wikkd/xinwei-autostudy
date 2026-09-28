@@ -30,9 +30,30 @@ function read(p) {
     return fs.readFileSync(p, 'utf8');
 }
 
+// 发布版瘦身：删除整行 // 注释并折叠空行（模板字符串内容原样保留；src 源码不受影响）
+function slim(code) {
+    const out = [];
+    let inTemplate = false;
+    let prevBlank = false;
+    for (let line of code.split('\n')) {
+        if (!inTemplate) {
+            const t = line.trim();
+            if (t.startsWith('//')) continue;
+            if (t === '') {
+                if (prevBlank) continue;
+                prevBlank = true;
+            } else prevBlank = false;
+        }
+        const ticks = (line.match(/`/g) || []).length;
+        if (ticks % 2 === 1) inTemplate = !inTemplate;
+        out.push(line.replace(/\s+$/, ''));
+    }
+    return out.join('\n');
+}
+
 function build() {
     const meta = read(path.join(SRC_DIR, 'meta.js')).trimEnd();
-    const parts = BODY_ORDER.map(f => read(path.join(SRC_DIR, f)));
+    const parts = BODY_ORDER.map(f => slim(read(path.join(SRC_DIR, f))));
     const bundle = [
         meta,
         '',

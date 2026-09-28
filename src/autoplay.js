@@ -103,7 +103,7 @@ function mainTick() {
         const cd = Math.max(0, Math.ceil((cooldownUntil - Date.now()) / 1000));
         console.log('[芯位] #' + tick + ' | 当前: "' + cur + '" | cd=' + cd + 's | 连跳=' + consecutiveJumps);
     }
-    try { XIA_AI.scan(); } catch (e) { console.error('[XIA] 扫描异常:', e); }
+    // 题目扫描由 ui.js 的 startAIScan 定时器驱动（自动答题开启时常驻），此处不再重复调用
     if (!isSectionComplete()) { consecutiveJumps = 0; return; }
     if (Date.now() < cooldownUntil) return;
     if (consecutiveJumps >= 3) { console.log('[芯位] 连续跳转' + consecutiveJumps + '次，暂停50s'); cooldownUntil = Date.now() + 50000; consecutiveJumps = 0; return; }

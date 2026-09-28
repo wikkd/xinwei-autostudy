@@ -10,6 +10,11 @@ function visible(el) {
     return true;
 }
 
+// 常用 DOM 小工具
+function qsa(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+function qtext(el) { return ((el && el.textContent) || '').replace(/\s+/g, ' ').trim(); }        // 压缩空白
+function qtextAll(el) { return ((el && el.textContent) || '').replace(/\s+/g, ''); }             // 去全部空白（精确比对用）
+
 // 静音所有视频（仅当 muteEnabled 开启）
 function muteAll() {
     document.querySelectorAll('video').forEach(v => { if (muteEnabled && !v.muted) v.muted = true; });
@@ -27,8 +32,7 @@ function keepPlay() {
     try { Object.defineProperty(document, 'visibilityState', { get: () => 'visible' }); } catch (e) {}
     try { document.hasFocus = function () { return true; }; } catch (e) {}
 
-    const rx = () => Math.random();
-    const randInt = (a, b) => Math.floor(rx() * (b - a) + a);
+    const randInt = (a, b) => Math.floor(Math.random() * (b - a) + a);
     const x = randInt(50, window.innerWidth - 50 || 200);
     const y = randInt(50, window.innerHeight - 50 || 200);
 
@@ -40,7 +44,7 @@ function keepPlay() {
         }));
     } catch (e) {}
 
-    if (rx() > 0.75) {
+    if (Math.random() > 0.75) {
         try {
             const t = document.elementFromPoint(x, y) || document.body;
             t.dispatchEvent(new MouseEvent('click', {
@@ -49,13 +53,13 @@ function keepPlay() {
             }));
         } catch (e) {}
     }
-    if (rx() > 0.88) {
+    if (Math.random() > 0.88) {
         try {
             const key = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageDown', 'PageUp'][randInt(0, 6)];
             document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
         } catch (e) {}
     }
-    if (rx() > 0.65) {
+    if (Math.random() > 0.65) {
         try { window.scrollBy({ top: randInt(-15, 15), left: randInt(-8, 8), behavior: 'instant' }); } catch (e) {}
     }
 }

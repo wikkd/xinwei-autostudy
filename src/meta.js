@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         芯位网课辅助 (Xinwei AutoStudy)
 // @namespace    https://github.com/wikkd/xinwei-autostudy
-// @version      1.0.0
-// @description  基于大语言模型的网课学习辅助：自动刷课 + AI 答题（含检索增强）。以 MIT 协议开源。
+// @version      2.0.0
+// @description  基于大语言模型的网课学习辅助：自动刷课 + AI 答题（单选/多选/判断/填空/主观，检索增强 + 本地答案本）。MIT 开源。
 // @author       wikkd
 // @homepage     https://github.com/wikkd/xinwei-autostudy
 // @supportURL   https://github.com/wikkd/xinwei-autostudy/issues

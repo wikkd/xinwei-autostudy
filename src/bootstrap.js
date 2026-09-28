@@ -14,6 +14,12 @@ makeDraggable(panel, panel.querySelector('.xa-header'));
 makeDraggable(mini, mini);
 bindUI();
 
+// 恢复上一次的最小化状态
+if (GM_getValue(SK.minimized, false)) {
+    panel.classList.add('xa-hidden');
+    mini.classList.add('show');
+}
+
 muteAll();
 
 // MIT 一句话提示（替代原拦截式免责弹窗）
