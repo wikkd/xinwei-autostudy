@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         芯位网课辅助 (Xinwei AutoStudy)
 // @namespace    https://github.com/wikkd/xinwei-autostudy
-// @version      2.1.1
+// @version      2.1.2
 // @description  多平台网课学习辅助（芯位 beeline-ai.com / 超星学习通 chaoxing.com）：自动刷课 + AI 答题（单选/多选/判断/填空/主观，检索增强 + 本地答案本）。MIT 开源。
 // @author       wikkd
 // @homepage     https://github.com/wikkd/xinwei-autostudy
@@ -227,7 +227,7 @@ const CX = {
     tick() {
         muteAll();
         if (!/\/mycourse\/studentstudy/.test(location.href)) return;
-        let playing = false;
+        let playing = CX.collectVideos(document, 0).some(v => !v.paused && !v.ended);
         const rpt = { frame: 0, vid: 0, btn: 0, play: 0 };
         const visit = (doc, depth) => {
             if (depth > 3) return;
@@ -235,8 +235,8 @@ const CX = {
             for (const v of qsa('video', doc)) {
                 rpt.vid++;
                 if (muteEnabled && !v.muted) v.muted = true;
-                if (conf.autoPlay && v.paused && !v.ended) {
-                    try { const p = v.play(); if (p && p.catch) p.catch(() => {}); rpt.play++; } catch (e) {}
+                if (conf.autoPlay && !playing && v.paused && !v.ended) {
+                    try { const p = v.play(); if (p && p.catch) p.catch(() => {}); rpt.play++; playing = true; } catch (e) {}
                 }
                 if (!v.paused && !v.ended) playing = true;
                 if (!v._xaDone && v.duration > 0 && (v.ended || v.currentTime >= v.duration * 0.92)) {
@@ -248,9 +248,18 @@ const CX = {
             for (const b of qsa('button, [role="button"], [class*="play"], a, div', doc)) {
                 if (qtext(b) !== '播放视频' || !visible(b)) continue;
                 rpt.btn++;
-                if (conf.autoPlay) { try { b.click(); } catch (e) {} }
+                if (conf.autoPlay && !playing) { try { b.click(); playing = true; } catch (e) {} }
             }
             for (const f of qsa('iframe', doc)) {
+                if (/antispider/i.test(f.src || '')) {
+                    if (!CX._capWarned) {
+                        CX._capWarned = true;
+                        XIA_AI.log('⚠️ 触发平台风控验证码，请人工在页面中输入验证码；通过后挂机自动恢复', 'error');
+                        XIA_AI.progress('⚠️ 等待人工验证码…');
+                    }
+                } else if (depth === 0 || f.src) {
+                    CX._capWarned = false;
+                }
                 try { if (f.contentDocument) visit(f.contentDocument, depth + 1); } catch (e) {}
             }
         };

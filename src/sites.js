@@ -63,7 +63,8 @@ const CX = {
     tick() {
         muteAll();
         if (!/\/mycourse\/studentstudy/.test(location.href)) return;
-        let playing = false;
+        // 预扫描：已有视频在播则本轮不再启动新视频——一章多个视频同播易触发风控 9010
+        let playing = CX.collectVideos(document, 0).some(v => !v.paused && !v.ended);
         const rpt = { frame: 0, vid: 0, btn: 0, play: 0 };
         const visit = (doc, depth) => {
             if (depth > 3) return;
@@ -71,8 +72,8 @@ const CX = {
             for (const v of qsa('video', doc)) {
                 rpt.vid++;
                 if (muteEnabled && !v.muted) v.muted = true;
-                if (conf.autoPlay && v.paused && !v.ended) {
-                    try { const p = v.play(); if (p && p.catch) p.catch(() => {}); rpt.play++; } catch (e) {}
+                if (conf.autoPlay && !playing && v.paused && !v.ended) {
+                    try { const p = v.play(); if (p && p.catch) p.catch(() => {}); rpt.play++; playing = true; } catch (e) {}
                 }
                 if (!v.paused && !v.ended) playing = true;
                 // 完成判定：ended 或播过 92%（平台要求 90%，留余量；不可拖拽只能真实播放）
@@ -83,13 +84,24 @@ const CX = {
                 }
             }
             // 大播放按钮：超星按钮无 title/aria（vjs-big-play-button 类名也可能变），
-            // 按可见文本精确匹配「播放视频」；点击后按钮消失故不会重复点击
+            // 按可见文本精确匹配「播放视频」；点击后按钮消失故不会重复点击；同样一轮只点一个
             for (const b of qsa('button, [role="button"], [class*="play"], a, div', doc)) {
                 if (qtext(b) !== '播放视频' || !visible(b)) continue;
                 rpt.btn++;
-                if (conf.autoPlay) { try { b.click(); } catch (e) {} }
+                if (conf.autoPlay && !playing) { try { b.click(); playing = true; } catch (e) {} }
             }
             for (const f of qsa('iframe', doc)) {
+                // 风控验证码：卡片 iframe 被 antispider 验证页替换（9010），提示人工处理；
+                // 验证通过后 iframe 恢复，复位标记以便下次再触发时仍能告警
+                if (/antispider/i.test(f.src || '')) {
+                    if (!CX._capWarned) {
+                        CX._capWarned = true;
+                        XIA_AI.log('⚠️ 触发平台风控验证码，请人工在页面中输入验证码；通过后挂机自动恢复', 'error');
+                        XIA_AI.progress('⚠️ 等待人工验证码…');
+                    }
+                } else if (depth === 0 || f.src) {
+                    CX._capWarned = false;
+                }
                 try { if (f.contentDocument) visit(f.contentDocument, depth + 1); } catch (e) {}
             }
         };
