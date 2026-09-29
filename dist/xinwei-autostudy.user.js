@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         芯位网课辅助 (Xinwei AutoStudy)
 // @namespace    https://github.com/wikkd/xinwei-autostudy
-// @version      2.1.2
+// @version      2.1.3
 // @description  多平台网课学习辅助（芯位 beeline-ai.com / 超星学习通 chaoxing.com）：自动刷课 + AI 答题（单选/多选/判断/填空/主观，检索增强 + 本地答案本）。MIT 开源。
 // @author       wikkd
 // @homepage     https://github.com/wikkd/xinwei-autostudy
@@ -45,6 +45,7 @@ const SK = {
     apiKey: 'xa_apikey', apiBase: 'xa_apibase', model: 'xa_model',
     autoAnswer: 'xa_autoanswer', autoPlay: 'xa_autoplay', autoSubmit: 'xa_autosubmit',
     searchProvider: 'xa_search_provider', searchApiKey: 'xa_search_key', searchMode: 'xa_search_mode',
+    cxSpeed: 'xa_cx_speed',     // 超星视频倍速（1/1.25/1.5/2，仅 chaoxing 生效；芯位不变速）
     bank: 'xa_answer_bank',     // 答案本：题目hash -> {a:答案, t:时间}
     panelPos: 'xa_panel_pos',   // 面板/迷你球拖动位置
     minimized: 'xa_minimized',  // 面板是否处于最小化
@@ -65,6 +66,7 @@ function loadCfg() {
         searchProvider: g(SK.searchProvider, CFG.DEFAULT_SEARCH_PROVIDER),
         searchApiKey: g(SK.searchApiKey, ''),
         searchMode: g(SK.searchMode, CFG.DEFAULT_SEARCH_MODE),
+        cxSpeed: parseFloat(g(SK.cxSpeed, '2')) || 2, // 默认 2x（平台开放上限）
     };
 }
 
@@ -195,8 +197,10 @@ const CX = {
     videoTick() {
         const on = GM_getValue(SK.autoPlay, false);
         conf.autoPlay = on === true || on === 'true';
+        const speed = parseFloat(GM_getValue(SK.cxSpeed, '2')) || 1;
         for (const v of document.querySelectorAll('video')) {
             if (muteEnabled && !v.muted) v.muted = true;
+            if (v.playbackRate !== speed) { try { v.playbackRate = speed; } catch (e) {} }
             if (conf.autoPlay && !v.ended && v.readyState >= 2 && v.paused) {
                 try { v.play().catch(() => {}); } catch (e) {}
             }
@@ -235,6 +239,7 @@ const CX = {
             for (const v of qsa('video', doc)) {
                 rpt.vid++;
                 if (muteEnabled && !v.muted) v.muted = true;
+                if (v.playbackRate !== conf.cxSpeed) { try { v.playbackRate = conf.cxSpeed; } catch (e) {} }
                 if (conf.autoPlay && !playing && v.paused && !v.ended) {
                     try { const p = v.play(); if (p && p.catch) p.catch(() => {}); rpt.play++; playing = true; } catch (e) {}
                 }
@@ -1326,6 +1331,12 @@ function buildPanel() {
       <div class="xa-switch" id="xa-autoplay-switch" title="开启自动刷课"></div>
     </div>
     <button class="xa-btn xa-mute">🔇 关闭静音</button>
+    <select class="xa-input" id="xa-cx-speed" title="超星视频倍速（芯位不受影响）">
+      <option value="1">超星倍速：1x（正常）</option>
+      <option value="1.25">超星倍速：1.25x</option>
+      <option value="1.5">超星倍速：1.5x</option>
+      <option value="2">超星倍速：2x（平台上限）</option>
+    </select>
   </div>
   <!-- Tab 2: AI 答题 -->
   <div class="xa-tab-pane" data-pane="ai">
@@ -1553,6 +1564,16 @@ function bindUI() {
         GM_setValue(SK.autoPlay, conf.autoPlay);
         refreshPlaySwitch();
     });
+
+    const cxSpeedInput = $('#xa-cx-speed');
+    if (cxSpeedInput) {
+        cxSpeedInput.value = String(conf.cxSpeed);
+        cxSpeedInput.addEventListener('change', () => {
+            conf.cxSpeed = parseFloat(cxSpeedInput.value) || 1;
+            GM_setValue(SK.cxSpeed, String(conf.cxSpeed));
+            XIA_AI.log('超星倍速已设为 ' + conf.cxSpeed + 'x（芯位视频不受影响）', 'ok');
+        });
+    }
 
     $('#xa-answer-once').addEventListener('click', e => {
         const b = e.currentTarget;

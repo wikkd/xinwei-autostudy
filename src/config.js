@@ -21,6 +21,7 @@ const SK = {
     apiKey: 'xa_apikey', apiBase: 'xa_apibase', model: 'xa_model',
     autoAnswer: 'xa_autoanswer', autoPlay: 'xa_autoplay', autoSubmit: 'xa_autosubmit',
     searchProvider: 'xa_search_provider', searchApiKey: 'xa_search_key', searchMode: 'xa_search_mode',
+    cxSpeed: 'xa_cx_speed',     // 超星视频倍速（1/1.25/1.5/2，仅 chaoxing 生效；芯位不变速）
     bank: 'xa_answer_bank',     // 答案本：题目hash -> {a:答案, t:时间}
     panelPos: 'xa_panel_pos',   // 面板/迷你球拖动位置
     minimized: 'xa_minimized',  // 面板是否处于最小化
@@ -41,5 +42,6 @@ function loadCfg() {
         searchProvider: g(SK.searchProvider, CFG.DEFAULT_SEARCH_PROVIDER),
         searchApiKey: g(SK.searchApiKey, ''),
         searchMode: g(SK.searchMode, CFG.DEFAULT_SEARCH_MODE),
+        cxSpeed: parseFloat(g(SK.cxSpeed, '2')) || 2, // 默认 2x（平台开放上限）
     };
 }

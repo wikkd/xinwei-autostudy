@@ -26,8 +26,10 @@ const CX = {
         // frame 里面板不生效，开关直接读存储
         const on = GM_getValue(SK.autoPlay, false);
         conf.autoPlay = on === true || on === 'true';
+        const speed = parseFloat(GM_getValue(SK.cxSpeed, '2')) || 1;
         for (const v of document.querySelectorAll('video')) {
             if (muteEnabled && !v.muted) v.muted = true;
+            if (v.playbackRate !== speed) { try { v.playbackRate = speed; } catch (e) {} }
             if (conf.autoPlay && !v.ended && v.readyState >= 2 && v.paused) {
                 try { v.play().catch(() => {}); } catch (e) {}
             }
@@ -72,6 +74,7 @@ const CX = {
             for (const v of qsa('video', doc)) {
                 rpt.vid++;
                 if (muteEnabled && !v.muted) v.muted = true;
+                if (v.playbackRate !== conf.cxSpeed) { try { v.playbackRate = conf.cxSpeed; } catch (e) {} }
                 if (conf.autoPlay && !playing && v.paused && !v.ended) {
                     try { const p = v.play(); if (p && p.catch) p.catch(() => {}); rpt.play++; playing = true; } catch (e) {}
                 }

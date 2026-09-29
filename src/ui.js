@@ -129,6 +129,12 @@ function buildPanel() {
       <div class="xa-switch" id="xa-autoplay-switch" title="开启自动刷课"></div>
     </div>
     <button class="xa-btn xa-mute">🔇 关闭静音</button>
+    <select class="xa-input" id="xa-cx-speed" title="超星视频倍速（芯位不受影响）">
+      <option value="1">超星倍速：1x（正常）</option>
+      <option value="1.25">超星倍速：1.25x</option>
+      <option value="1.5">超星倍速：1.5x</option>
+      <option value="2">超星倍速：2x（平台上限）</option>
+    </select>
   </div>
   <!-- Tab 2: AI 答题 -->
   <div class="xa-tab-pane" data-pane="ai">
@@ -364,6 +370,17 @@ function bindUI() {
         GM_setValue(SK.autoPlay, conf.autoPlay);
         refreshPlaySwitch();
     });
+
+    // 超星倍速（仅 chaoxing 生效，芯位不变速）
+    const cxSpeedInput = $('#xa-cx-speed');
+    if (cxSpeedInput) {
+        cxSpeedInput.value = String(conf.cxSpeed);
+        cxSpeedInput.addEventListener('change', () => {
+            conf.cxSpeed = parseFloat(cxSpeedInput.value) || 1;
+            GM_setValue(SK.cxSpeed, String(conf.cxSpeed));
+            XIA_AI.log('超星倍速已设为 ' + conf.cxSpeed + 'x（芯位视频不受影响）', 'ok');
+        });
+    }
 
     // 单次答题按钮（执行期间禁用防连点）
     $('#xa-answer-once').addEventListener('click', e => {
