@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         芯位网课辅助 (Xinwei AutoStudy)
 // @namespace    https://github.com/wikkd/xinwei-autostudy
-// @version      2.1.0
+// @version      2.1.1
 // @description  多平台网课学习辅助（芯位 beeline-ai.com / 超星学习通 chaoxing.com）：自动刷课 + AI 答题（单选/多选/判断/填空/主观，检索增强 + 本地答案本）。MIT 开源。
 // @author       wikkd
 // @homepage     https://github.com/wikkd/xinwei-autostudy
@@ -228,15 +228,15 @@ const CX = {
         muteAll();
         if (!/\/mycourse\/studentstudy/.test(location.href)) return;
         let playing = false;
+        const rpt = { frame: 0, vid: 0, btn: 0, play: 0 };
         const visit = (doc, depth) => {
             if (depth > 3) return;
-            const vids = qsa('video', doc);
-            for (const v of vids) {
+            rpt.frame++;
+            for (const v of qsa('video', doc)) {
+                rpt.vid++;
                 if (muteEnabled && !v.muted) v.muted = true;
                 if (conf.autoPlay && v.paused && !v.ended) {
-                    try { v.play().catch(() => {}); } catch (e) {}
-                    const btn = doc.querySelector('.vjs-big-play-button, [title="播放视频"], [aria-label="播放视频"]');
-                    if (btn) { try { btn.click(); } catch (e) {} }
+                    try { const p = v.play(); if (p && p.catch) p.catch(() => {}); rpt.play++; } catch (e) {}
                 }
                 if (!v.paused && !v.ended) playing = true;
                 if (!v._xaDone && v.duration > 0 && (v.ended || v.currentTime >= v.duration * 0.92)) {
@@ -245,13 +245,25 @@ const CX = {
                     CX.clickNextSection();
                 }
             }
+            for (const b of qsa('button, [role="button"], [class*="play"], a, div', doc)) {
+                if (qtext(b) !== '播放视频' || !visible(b)) continue;
+                rpt.btn++;
+                if (conf.autoPlay) { try { b.click(); } catch (e) {} }
+            }
             for (const f of qsa('iframe', doc)) {
                 try { if (f.contentDocument) visit(f.contentDocument, depth + 1); } catch (e) {}
             }
         };
         visit(document, 0);
-        if (conf.autoPlay && !playing && Date.now() - (CX._idleLogAt || 0) > 30000) {
-            CX._idleLogAt = Date.now();
+        const now = Date.now();
+        if (now - (CX._rptAt || 0) > 30000) {
+            CX._rptAt = now;
+            XIA_AI.log('🔍 视频扫描: frames=' + rpt.frame + ' videos=' + rpt.vid
+                + ' playBtns=' + rpt.btn + ' playCalls=' + rpt.play
+                + (playing ? ' ▶播放中' : ' ⏸未播放') + ' autoPlay=' + !!conf.autoPlay, 'ai');
+        }
+        if (conf.autoPlay && !playing && now - (CX._idleLogAt || 0) > 60000) {
+            CX._idleLogAt = now;
             XIA_AI.progress('⏳ 等待视频任务点…');
         }
     },
@@ -280,11 +292,6 @@ const CX = {
         }
     },
 
-    tick() {
-        muteAll();
-        if (/\/mycourse\/studentstudy/.test(location.href)) {
-        }
-    },
 };
 
 const CXQA = {

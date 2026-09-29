@@ -64,17 +64,15 @@ const CX = {
         muteAll();
         if (!/\/mycourse\/studentstudy/.test(location.href)) return;
         let playing = false;
+        const rpt = { frame: 0, vid: 0, btn: 0, play: 0 };
         const visit = (doc, depth) => {
             if (depth > 3) return;
-            const vids = qsa('video', doc);
-            for (const v of vids) {
+            rpt.frame++;
+            for (const v of qsa('video', doc)) {
+                rpt.vid++;
                 if (muteEnabled && !v.muted) v.muted = true;
                 if (conf.autoPlay && v.paused && !v.ended) {
-                    // 不设 readyState 门槛：play() 本身会触发流加载；
-                    // 播放器需点「播放视频」大按钮才初始化流，paused 时兜底补点（开播后按钮自动消失）
-                    try { v.play().catch(() => {}); } catch (e) {}
-                    const btn = doc.querySelector('.vjs-big-play-button, [title="播放视频"], [aria-label="播放视频"]');
-                    if (btn) { try { btn.click(); } catch (e) {} }
+                    try { const p = v.play(); if (p && p.catch) p.catch(() => {}); rpt.play++; } catch (e) {}
                 }
                 if (!v.paused && !v.ended) playing = true;
                 // 完成判定：ended 或播过 92%（平台要求 90%，留余量；不可拖拽只能真实播放）
@@ -84,13 +82,28 @@ const CX = {
                     CX.clickNextSection();
                 }
             }
+            // 大播放按钮：超星按钮无 title/aria（vjs-big-play-button 类名也可能变），
+            // 按可见文本精确匹配「播放视频」；点击后按钮消失故不会重复点击
+            for (const b of qsa('button, [role="button"], [class*="play"], a, div', doc)) {
+                if (qtext(b) !== '播放视频' || !visible(b)) continue;
+                rpt.btn++;
+                if (conf.autoPlay) { try { b.click(); } catch (e) {} }
+            }
             for (const f of qsa('iframe', doc)) {
                 try { if (f.contentDocument) visit(f.contentDocument, depth + 1); } catch (e) {}
             }
         };
         visit(document, 0);
-        if (conf.autoPlay && !playing && Date.now() - (CX._idleLogAt || 0) > 30000) {
-            CX._idleLogAt = Date.now();
+        // 诊断报告 30s 节流：帧数/视频数/按钮数/play调用数，用于远程定位链路断点
+        const now = Date.now();
+        if (now - (CX._rptAt || 0) > 30000) {
+            CX._rptAt = now;
+            XIA_AI.log('🔍 视频扫描: frames=' + rpt.frame + ' videos=' + rpt.vid
+                + ' playBtns=' + rpt.btn + ' playCalls=' + rpt.play
+                + (playing ? ' ▶播放中' : ' ⏸未播放') + ' autoPlay=' + !!conf.autoPlay, 'ai');
+        }
+        if (conf.autoPlay && !playing && now - (CX._idleLogAt || 0) > 60000) {
+            CX._idleLogAt = now;
             XIA_AI.progress('⏳ 等待视频任务点…');
         }
     },
@@ -119,13 +132,6 @@ const CX = {
         }
     },
 
-    // autoplay 主循环在 chaoxing top 帧的分支（视频工作都在播放器帧自己的 loop 里）
-    tick() {
-        muteAll();
-        if (/\/mycourse\/studentstudy/.test(location.href)) {
-            // 视频由播放器帧驱动，这里仅等待 message（bindStudyTop 已挂）
-        }
-    },
 };
 
 // ===== 超星题目适配器（.TiMu 题块）=====

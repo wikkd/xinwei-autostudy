@@ -37,14 +37,19 @@ function ps(script) {
 }
 
 const ACTIVATE = `
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type -Namespace Win32 -Name FG -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
 [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, ref RECT r);
+public struct RECT { public int L, T, R, B; }
+[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+[DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
 '@
 $p = Get-Process chrome -ErrorAction SilentlyContinue |
     Where-Object { $_.MainWindowTitle -ne '' } | Select-Object -First 1
 if (-not $p) { Write-Output 'NO-CHROME'; exit }
-[Win32.FG]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
+[Win32.FG]::ShowWindow($p.MainWindowHandle, 3) | Out-Null
 [Win32.FG]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
 Start-Sleep -Milliseconds 800
 Write-Output ("TITLE=" + $p.MainWindowTitle)
@@ -57,6 +62,30 @@ Start-Sleep -Milliseconds 700
 $p = Get-Process chrome -ErrorAction SilentlyContinue |
     Where-Object { $_.MainWindowTitle -ne '' } | Select-Object -First 1
 Write-Output ("TITLE=" + $p.MainWindowTitle)
+`;
+
+// 点击编辑器正文：SendKeys 无法点击，必须真点一次鼠标让 CodeMirror 拿到焦点，
+// 否则 Ctrl+A/V/S 作用在页面上（曾因此触发浏览器的「另存为」对话框）。
+// 取窗口内相对位置（55%, 42%）——编辑器代码区中心，避开行号与侧栏。
+const CLICK_EDITOR = `
+Add-Type -Namespace Win32 -Name MC -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+[DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
+[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, ref RECT r);
+public struct RECT { public int L, T, R, B; }
+'@
+$p = Get-Process chrome -ErrorAction SilentlyContinue |
+    Where-Object { $_.MainWindowTitle -ne '' } | Select-Object -First 1
+$r = New-Object Win32.MC+RECT
+[Win32.MC]::GetWindowRect($p.MainWindowHandle, [ref]$r) | Out-Null
+$x = [int](($r.R - $r.L) * 0.55) + $r.L
+$y = [int](($r.B - $r.T) * 0.42) + $r.T
+[Win32.MC]::SetCursorPos($x, $y) | Out-Null
+Start-Sleep -Milliseconds 200
+[Win32.MC]::mouse_event(2, 0, 0, 0, [UIntPtr]::Zero)   # LEFTDOWN
+[Win32.MC]::mouse_event(4, 0, 0, 0, [UIntPtr]::Zero)   # LEFTUP
+Start-Sleep -Milliseconds 600
+Write-Output 'CLICKED'
 `;
 
 const SAVE_KEYS = `
@@ -100,7 +129,15 @@ Write-Output 'KEYS-SENT'
     const wait = process.argv.includes('--slow') ? 5000 : 0;
     if (wait) { console.log(`   额外等待 ${wait / 1000}s ...`); await sleep(wait); }
 
-    console.log('⑤ 粘贴并保存 ...');
+    console.log('⑤ 点击编辑器正文（拿到焦点）...');
+    out = ps(CLICK_EDITOR);
+    if (!out.includes('CLICKED')) {
+        console.log('⚠️ 编辑器点击未确认，中止以免误触。请手动 Ctrl+A/V/S。');
+        process.exit(1);
+    }
+    await sleep(500);
+
+    console.log('⑥ 粘贴并保存 ...');
     out = ps(SAVE_KEYS);
     if (out.includes('KEYS-SENT')) {
         console.log('✅ 部署完成：浏览器编辑器页应显示「保存成功」气泡。');
