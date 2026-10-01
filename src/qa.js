@@ -63,6 +63,21 @@ function exactText(selector, text) {
     return hit;
 }
 
+// 图片作答题检测：题干/题块明确要求上传图片、拍照等（LLM 无法产出图片，需跳过交人工）。
+// 仅按文本特征判定，不检测上传控件——编辑器工具栏普遍自带图片按钮，按控件判定会全量误报。
+function isImageAnswerQuestion(root) {
+    if (!root) return false;
+    const box = (root.closest && root.closest('.question-box')) || root;
+    const text = qtext(box);
+    if (/上传[^。]{0,8}(图片|照片|截图|图像)|(图片|照片|截图|图像)[^。]{0,8}(作答|答题|回答|上传)|拍照上传|拍照作答|以图片形式|手写并?(拍照|上传)/.test(text)) return true;
+    let hit = false;
+    qsa('button, .el-button, a, span, div, [class*="tip"], [class*="hint"]', box).forEach(el => {
+        if (hit || !visible(el)) return;
+        if (/^(上传图片|上传照片|图片上传|拍照上传|点击上传|拍照作答)$/.test(qtextAll(el)) && el.offsetHeight < 80) hit = true;
+    });
+    return hit;
+}
+
 // ============ 题目容器定位与解析 ============
 
 function questionRoot() {
@@ -186,6 +201,8 @@ const XIA_AI = {
     _walkerEmptyLog: 0,
     _cfgError: null,
     _cfgLogAt: 0,
+    _nextAnswerAt: 0,   // 答题间隔：该时间戳之前不抓答新题
+    _imgLogged: '',
     _bank: null,
     logLines: [],
 
@@ -239,7 +256,37 @@ const XIA_AI = {
         try { GM_setValue(SK.bank, JSON.stringify(XIA_AI._bank)); } catch (e) {}
     },
 
-    // 抓取当前题目（经站点适配器：beeline=.homework-* 根 / chaoxing=.TiMu 题块）
+    // ===== 图片作答题跳过记录（GM 持久化）：巡航重进同一份作业时直接跳过不再尝试 =====
+    imgSkippedHas(hash) {
+        let arr = [];
+        try { arr = JSON.parse(GM_getValue(SK.imgSkipped, '[]')) || []; } catch (e) {}
+        return arr.some(x => x && x.h === hash);
+    },
+    imgSkipRemember(hash, title) {
+        let arr = [];
+        try { arr = JSON.parse(GM_getValue(SK.imgSkipped, '[]')) || []; } catch (e) {}
+        if (arr.some(x => x && x.h === hash)) return;
+        arr.push({ h: hash, q: String(title || '').slice(0, 80), t: Date.now() });
+        if (arr.length > 100) arr = arr.slice(-100);
+        try { GM_setValue(SK.imgSkipped, JSON.stringify(arr)); } catch (e) {}
+    },
+
+    // 图片作答题：不调用 AI，记录并提示人工；尝试跳下一题（单次），跳不动则停在本题等人工
+    handleImageSkip(q, hash) {
+        XIA_AI.lastQuestionHash = hash; // 阻断同题重复扫描
+        if (XIA_AI._imgLogged !== hash) {
+            XIA_AI._imgLogged = hash;
+            XIA_AI.imgSkipRemember(hash, q.question);
+            XIA_AI.log('🖼️ 该题需要图片作答，已跳过，请人工上传图片: ' + (q.question || '').slice(0, 60), 'error');
+            XIA_AI.progress('🖼️ 图片题已跳过，待人工处理');
+        }
+        const now = Date.now();
+        if (XIA_AI._lastNav && now - XIA_AI._lastNav < 2500) return;
+        XIA_AI._lastNav = now;
+        clickNextQuestionButton();
+    },
+
+    // 抓取当前题目（.homework-* 题块）
     grabQuestion() {
         try {
             const root = QA.questionRoot();
@@ -482,8 +529,7 @@ const XIA_AI = {
         const qEl = root || QA.questionRoot();
         if (!qEl) { XIA_AI.log('页面已无题目容器，无法点击', 'error'); if (onDone) onDone(false); return; }
         const isMulti = QA.questionType(qEl) === 'multi';
-        const labels = qsa('.el-radio, .el-checkbox', qEl).length ? qsa('.el-radio, .el-checkbox', qEl)
-            : qsa('ul li', qEl).filter(li => QA.letterOf(li) || /^(对|错|正确|错误)/.test(qtext(li))); // chaoxing: ul>li 选项
+        const labels = qsa('.el-radio, .el-checkbox', qEl);
         const arr = String(letters).toUpperCase().replace(/[^A-H]/g, '').split('');
         let i = 0;
         const step = () => {
@@ -498,8 +544,6 @@ const XIA_AI = {
                 const input = hit.querySelector('input[type="radio"], input[type="checkbox"]');
                 if (input && !input.checked) {
                     try { input.click(); } catch (e) { try { XIA_AI.forceClick(hit); } catch (e2) {} }
-                } else if (!input) {
-                    try { XIA_AI.forceClick(hit); } catch (e) {} // chaoxing li 无内部 input
                 }
             } else {
                 const inner = hit.querySelector('.el-radio__inner, .el-checkbox__inner');
@@ -604,6 +648,8 @@ const XIA_AI = {
                 XIA_AI.bankSet(hash, answer); // 成功回填 → 存入答案本
                 XIA_AI.lastQuestionHash = '';
                 XIA_AI.bump('answered');
+                const delay = Math.max(0, parseInt(conf.answerDelay, 10) || 0);
+                if (delay) XIA_AI._nextAnswerAt = Date.now() + delay * 1000;
                 XIA_AI.progress('✅ 已答 ' + XIA_AI.stats.answered + ' 题');
                 XIA_AI.log('回填已生效，跳转下一题', 'ok');
                 clickNextQuestionButton();
@@ -647,9 +693,8 @@ const XIA_AI = {
         XIA_AI.progress('📝 自动提交中…');
         try { btn.click(); } catch (e) {}
         setTimeout(() => {
-            // 确认弹窗：beeline 为 element-ui 组件；超星为自绘弹层（按 class 模糊匹配）。
-            // 找不到弹层时退化为全页扫「确定/确认/提交」文本按钮。
-            const pops = qsa('.el-message-box, .el-dialog, .el-popconfirm, [class*="dialog"], [class*="popup"], [class*="maskdiv"], [class*="mask_"]').filter(visible);
+            // 确认弹窗：element-ui 组件；找不到弹层时退化为全页扫「确定/确认/提交」文本按钮。
+            const pops = qsa('.el-message-box, .el-dialog, .el-popconfirm, [class*="dialog"], [class*="popup"]').filter(visible);
             if (pops.length) {
                 const msg = pops.map(d => qtextAll(d)).join(' ');
                 if (/未(作答|回答|完成)|尚未(作答|完成)|还有\d*题|请(先)?(答完|完成所有|作答)/.test(msg)) {
@@ -694,6 +739,10 @@ const XIA_AI = {
             XIA_AI.log('当前页面未找到可答题目', 'error');
             return;
         }
+        if (isImageAnswerQuestion(q.node)) {
+            XIA_AI.log('🖼️ 该题需要图片作答，请人工上传图片', 'error');
+            return;
+        }
         XIA_AI.answeringOnce = true;
         XIA_AI.log('🎯 单次答题: ' + q.question.slice(0, 60) + (q.question.length > 60 ? '…' : ''), 'ok');
         XIA_AI.callAI(q, answer => {
@@ -722,6 +771,12 @@ const XIA_AI = {
         try { if (homeworkWalker()) return; } catch (e) { console.log('[XIA-walker] 异常', e); }
         if (XIA_AI._donePage && (location.hash + location.pathname) === XIA_AI._donePage) return; // 本卷刚提交成功，等 walker 接管
 
+        // 答题间隔：答完一题后等待 N 秒再答下一题（面板可配，0=不等待）
+        if (XIA_AI._nextAnswerAt && Date.now() < XIA_AI._nextAnswerAt) {
+            XIA_AI.progress('⏳ 答题间隔 ' + Math.ceil((XIA_AI._nextAnswerAt - Date.now()) / 1000) + 's');
+            return;
+        }
+
         const q = XIA_AI.grabQuestion();
         if (!q || !q.question) return;
         if (q.type !== 'subjective' && q.type !== 'cloze' && q.options.length === 0) return;
@@ -745,6 +800,12 @@ const XIA_AI = {
             XIA_AI.lastQuestionHash = '';
             XIA_AI.log('题目已作答，跳到下一题', 'info');
             clickNextQuestionButton();
+            return;
+        }
+
+        // 图片作答题：LLM 产出不了图片，跳过并通知人工（含历史跳过记录命中）
+        if (isImageAnswerQuestion(q.node) || XIA_AI.imgSkippedHas(hash)) {
+            XIA_AI.handleImageSkip(q, hash);
             return;
         }
 
@@ -778,6 +839,8 @@ const XIA_AI = {
                     if (ok) {
                         XIA_AI.bankSet(hash, ans);
                         XIA_AI.bump('answered');
+                        const delay = Math.max(0, parseInt(conf.answerDelay, 10) || 0);
+                        if (delay) XIA_AI._nextAnswerAt = Date.now() + delay * 1000;
                         XIA_AI.progress('✅ 已答 ' + XIA_AI.stats.answered + ' 题');
                         XIA_AI.log('主观题答案已填入，2s 后跳转下一题', 'ok');
                         setTimeout(() => { clickNextQuestionButton(); XIA_AI.answering = false; }, 2000);
@@ -806,7 +869,6 @@ const XIA_AI = {
 
     // 🩺 诊断：dump 当前页题目 DOM 结构（平台改版后按真机结构修选择器用）
     diagnose() {
-        if (XA_SITE === 'chaoxing') { CXQA.diagnose(); return; }
         const out = [];
         const push = s => { out.push(s); XIA_AI.log(s, 'ai'); };
         push('🩺 诊断 ' + location.href.slice(0, 70));

@@ -5,11 +5,11 @@
 function initPopupAutoReload() {
     const RELOAD_COOLDOWN = 20000; // 20s 冷却，防止刷新死循环
     setInterval(() => {
-        const last = Number(GM_getValue('xa_last_reload_at', 0));
+        const last = Number(GM_getValue(SK.lastReload, 0));
         if (Date.now() - last < RELOAD_COOLDOWN) return;
         const text = (document.body && document.body.innerText) || '';
         if (text.indexOf('学习状态异常') !== -1 || text.indexOf('请刷新后继续学习') !== -1) {
-            GM_setValue('xa_last_reload_at', Date.now());
+            GM_setValue(SK.lastReload, Date.now());
             console.log('[芯位] 检测到学习状态异常弹窗，3秒后自动刷新页面');
             setTimeout(() => { location.reload(); }, 3000);
         }

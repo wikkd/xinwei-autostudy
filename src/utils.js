@@ -15,9 +15,40 @@ function qsa(sel, root) { return Array.prototype.slice.call((root || document).q
 function qtext(el) { return ((el && el.textContent) || '').replace(/\s+/g, ' ').trim(); }        // 压缩空白
 function qtextAll(el) { return ((el && el.textContent) || '').replace(/\s+/g, ''); }             // 去全部空白（精确比对用）
 
-// 静音所有视频（仅当 muteEnabled 开启）
+// ==================== 整页静音 ====================
+// 三重拦截，保证开启静音后页面完全无声（面板可一键恢复声音）：
+// ① 新挂载的 video/audio 立即静音（MutationObserver，含动态创建的元素）
+// ② 劫持 HTMLMediaElement.play()：任何播放调用先静音（堵住轮询间隙）
+// ③ 捕获 volumechange：页面/播放器任何取消静音的操作即时压回（该事件不冒泡，必须用捕获）
+function installMute() {
+    const muteEl = el => { if (muteEnabled && !el.muted) el.muted = true; };
+    try {
+        new MutationObserver(muts => {
+            for (const m of muts) for (const n of m.addedNodes) {
+                if (n.nodeType !== 1) continue;
+                if (n instanceof HTMLMediaElement) muteEl(n);
+                if (n.querySelectorAll) qsa('video, audio', n).forEach(muteEl);
+            }
+        }).observe(document.documentElement, { childList: true, subtree: true });
+    } catch (e) {}
+    try {
+        const origPlay = HTMLMediaElement.prototype.play;
+        HTMLMediaElement.prototype.play = function () {
+            if (muteEnabled) this.muted = true;
+            return origPlay.apply(this, arguments);
+        };
+    } catch (e) {}
+    try {
+        document.addEventListener('volumechange', e => {
+            const t = e.target;
+            if (muteEnabled && t && (t.tagName === 'VIDEO' || t.tagName === 'AUDIO') && !t.muted) t.muted = true;
+        }, true);
+    } catch (e) {}
+}
+
+// 静音当前所有媒体元素（轮询兜底，配合 installMute 的三重拦截）
 function muteAll() {
-    document.querySelectorAll('video').forEach(v => { if (muteEnabled && !v.muted) v.muted = true; });
+    document.querySelectorAll('video, audio').forEach(v => { if (muteEnabled && !v.muted) v.muted = true; });
 }
 
 // 反挂机检测规避：伪造可见/聚焦状态 + 合成随机用户行为

@@ -38,6 +38,7 @@ const PANEL_CSS = `
 .xa-input{width:100%;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;font-size:12px;
   font-family:inherit;outline:none;transition:border-color .2s;box-sizing:border-box;}
 .xa-input:focus{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,.12);}
+.xa-ai-inputs{display:flex;flex-direction:column;gap:8px;}
 .xa-row{display:flex;align-items:center;gap:8px;}
 .xa-switch{position:relative;width:42px;height:22px;border-radius:11px;background:#d1d5db;cursor:pointer;transition:background .2s;flex-shrink:0;}
 .xa-switch.on{background:linear-gradient(135deg,#10b981,#059669);}
@@ -129,12 +130,6 @@ function buildPanel() {
       <div class="xa-switch" id="xa-autoplay-switch" title="开启自动刷课"></div>
     </div>
     <button class="xa-btn xa-mute">🔇 关闭静音</button>
-    <select class="xa-input" id="xa-cx-speed" title="超星视频倍速（芯位不受影响）">
-      <option value="1">超星倍速：1x（正常）</option>
-      <option value="1.25">超星倍速：1.25x</option>
-      <option value="1.5">超星倍速：1.5x</option>
-      <option value="2">超星倍速：2x（平台上限）</option>
-    </select>
   </div>
   <!-- Tab 2: AI 答题 -->
   <div class="xa-tab-pane" data-pane="ai">
@@ -174,6 +169,10 @@ function buildPanel() {
     <div class="xa-row">
       <div class="xa-switch" id="xa-autosubmit-switch" title="全部答完后自动提交作业（含未答题保护）"></div>
       <span style="font-size:12px;color:#374151;font-weight:600;">答完自动提交作业</span>
+    </div>
+    <div class="xa-row" style="justify-content:space-between;">
+      <span style="font-size:12px;color:#374151;font-weight:600;">答题间隔（秒）</span>
+      <input class="xa-input" id="xa-answer-delay" type="number" min="0" max="600" step="1" style="width:76px;padding:5px 8px;" title="每答完一题后等待的秒数再答下一题，0 = 不等待" />
     </div>
   </div>
   <!-- Tab 3: 关于 -->
@@ -265,6 +264,7 @@ function bindUI() {
     const searchApiKeyInput = $('#xa-search-key');
     const autoSwitch = $('#xa-autoanswer-switch');
     const playSwitch = $('#xa-autoplay-switch');
+    const answerDelayInput = $('#xa-answer-delay');
 
     // Tab 切换
     qsa('.xa-tab').forEach(tab => {
@@ -304,6 +304,7 @@ function bindUI() {
     saveInput('searchMode', searchModeInput);
     saveInput('searchProvider', searchProviderInput);
     saveInput('searchApiKey', searchApiKeyInput);
+    saveInput('answerDelay', answerDelayInput);
 
     // API Key 输入时实时更新状态
     apikeyInput.addEventListener('input', () => {
@@ -318,6 +319,7 @@ function bindUI() {
     searchModeInput.value = conf.searchMode;
     searchProviderInput.value = conf.searchProvider;
     searchApiKeyInput.value = conf.searchApiKey;
+    answerDelayInput.value = conf.answerDelay;
     setAIStatus(conf.apiKey ? true : null, conf.apiKey ? 'AI 引擎已就绪' : '等待配置 Key');
 
     // 自动答题开关
@@ -338,7 +340,7 @@ function bindUI() {
         }
     }
 
-    // 自动提交开关（默认开启，可用面板关闭）
+    // 自动提交开关（默认关闭——影响真实成绩的高风险项，可在面板显式开启）
     const submitSwitch = $('#xa-autosubmit-switch');
     submitSwitch.addEventListener('click', () => {
         conf.autoSubmit = !conf.autoSubmit;
@@ -371,17 +373,6 @@ function bindUI() {
         refreshPlaySwitch();
     });
 
-    // 超星倍速（仅 chaoxing 生效，芯位不变速）
-    const cxSpeedInput = $('#xa-cx-speed');
-    if (cxSpeedInput) {
-        cxSpeedInput.value = String(conf.cxSpeed);
-        cxSpeedInput.addEventListener('change', () => {
-            conf.cxSpeed = parseFloat(cxSpeedInput.value) || 1;
-            GM_setValue(SK.cxSpeed, String(conf.cxSpeed));
-            XIA_AI.log('超星倍速已设为 ' + conf.cxSpeed + 'x（芯位视频不受影响）', 'ok');
-        });
-    }
-
     // 单次答题按钮（执行期间禁用防连点）
     $('#xa-answer-once').addEventListener('click', e => {
         const b = e.currentTarget;
@@ -406,7 +397,7 @@ function bindUI() {
     muteBtn.addEventListener('click', () => {
         muteEnabled = !muteEnabled;
         if (muteEnabled) { muteAll(); muteBtn.classList.remove('muted'); muteBtn.textContent = '🔇 关闭静音'; }
-        else { document.querySelectorAll('video').forEach(v => { if (v.muted) v.muted = false; }); muteBtn.classList.add('muted'); muteBtn.textContent = '🔊 开启声音'; }
+        else { document.querySelectorAll('video, audio').forEach(v => { if (v.muted) v.muted = false; }); muteBtn.classList.add('muted'); muteBtn.textContent = '🔊 开启声音'; }
     });
 
     XIA_AI.bump(); // 初始化统计显示

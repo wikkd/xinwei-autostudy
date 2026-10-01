@@ -1,14 +1,13 @@
 // ==UserScript==
 // @name         芯位网课辅助 (Xinwei AutoStudy)
 // @namespace    https://github.com/wikkd/xinwei-autostudy
-// @version      2.1.3
-// @description  多平台网课学习辅助（芯位 beeline-ai.com / 超星学习通 chaoxing.com）：自动刷课 + AI 答题（单选/多选/判断/填空/主观，检索增强 + 本地答案本）。MIT 开源。
+// @version      3.1.0
+// @description  芯位（beeline-ai.com）网课学习辅助用户脚本：自动刷课 + AI 答题（单选/多选/判断/填空/主观，检索增强 + 本地答案本）。MIT 开源。
 // @author       wikkd
 // @homepage     https://github.com/wikkd/xinwei-autostudy
 // @supportURL   https://github.com/wikkd/xinwei-autostudy/issues
 // @match        https://www.beeline-ai.com/*
 // @match        https://beeline-ai.com/*
-// @match        *://*.chaoxing.com/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -37,7 +36,7 @@ const CFG = {
     DEFAULT_API_BASE: 'https://api.deepseek.com',
     DEFAULT_MODEL: 'deepseek-chat',
     DEFAULT_SEARCH_PROVIDER: 'duckduckgo', // duckduckgo(免密钥) / tavily(需Key)
-    DEFAULT_SEARCH_MODE: 'auto',           // off / auto / always
+    DEFAULT_SEARCH_MODE: 'off',            // off / auto / always；默认 off：检索会向外部引擎发送题目内容，风险项用户显式开启
     SEARCH_MAX_CHARS: 3000,
 };
 
@@ -45,10 +44,12 @@ const SK = {
     apiKey: 'xa_apikey', apiBase: 'xa_apibase', model: 'xa_model',
     autoAnswer: 'xa_autoanswer', autoPlay: 'xa_autoplay', autoSubmit: 'xa_autosubmit',
     searchProvider: 'xa_search_provider', searchApiKey: 'xa_search_key', searchMode: 'xa_search_mode',
-    cxSpeed: 'xa_cx_speed',     // 超星视频倍速（1/1.25/1.5/2，仅 chaoxing 生效；芯位不变速）
     bank: 'xa_answer_bank',     // 答案本：题目hash -> {a:答案, t:时间}
     panelPos: 'xa_panel_pos',   // 面板/迷你球拖动位置
     minimized: 'xa_minimized',  // 面板是否处于最小化
+    lastReload: 'xa_last_reload_at', // 异常弹窗自动刷新的冷却时间戳
+    answerDelay: 'xa_answer_delay',  // 答题间隔秒数（0=不等待）
+    imgSkipped: 'xa_img_skipped',    // 图片作答题跳过记录（hash→题干摘要）
 };
 
 let conf = {};
@@ -62,11 +63,11 @@ function loadCfg() {
         model: g(SK.model, CFG.DEFAULT_MODEL),
         autoAnswer: b(g(SK.autoAnswer, false)),
         autoPlay: b(g(SK.autoPlay, false)),
-        autoSubmit: b(g(SK.autoSubmit, true)),
+        autoSubmit: b(g(SK.autoSubmit, false)),
         searchProvider: g(SK.searchProvider, CFG.DEFAULT_SEARCH_PROVIDER),
         searchApiKey: g(SK.searchApiKey, ''),
+        answerDelay: String(g(SK.answerDelay, '0')),
         searchMode: g(SK.searchMode, CFG.DEFAULT_SEARCH_MODE),
-        cxSpeed: parseFloat(g(SK.cxSpeed, '2')) || 2, // 默认 2x（平台开放上限）
     };
 }
 
@@ -84,8 +85,34 @@ function qsa(sel, root) { return Array.prototype.slice.call((root || document).q
 function qtext(el) { return ((el && el.textContent) || '').replace(/\s+/g, ' ').trim(); }        // 压缩空白
 function qtextAll(el) { return ((el && el.textContent) || '').replace(/\s+/g, ''); }             // 去全部空白（精确比对用）
 
+function installMute() {
+    const muteEl = el => { if (muteEnabled && !el.muted) el.muted = true; };
+    try {
+        new MutationObserver(muts => {
+            for (const m of muts) for (const n of m.addedNodes) {
+                if (n.nodeType !== 1) continue;
+                if (n instanceof HTMLMediaElement) muteEl(n);
+                if (n.querySelectorAll) qsa('video, audio', n).forEach(muteEl);
+            }
+        }).observe(document.documentElement, { childList: true, subtree: true });
+    } catch (e) {}
+    try {
+        const origPlay = HTMLMediaElement.prototype.play;
+        HTMLMediaElement.prototype.play = function () {
+            if (muteEnabled) this.muted = true;
+            return origPlay.apply(this, arguments);
+        };
+    } catch (e) {}
+    try {
+        document.addEventListener('volumechange', e => {
+            const t = e.target;
+            if (muteEnabled && t && (t.tagName === 'VIDEO' || t.tagName === 'AUDIO') && !t.muted) t.muted = true;
+        }, true);
+    } catch (e) {}
+}
+
 function muteAll() {
-    document.querySelectorAll('video').forEach(v => { if (muteEnabled && !v.muted) v.muted = true; });
+    document.querySelectorAll('video, audio').forEach(v => { if (muteEnabled && !v.muted) v.muted = true; });
 }
 
 function keepPlay() {
@@ -183,215 +210,7 @@ function findNextMenuItem(activeNode) {
 }
 
 
-const XA_SITE = /(^|\.)chaoxing\.com$/.test(location.hostname) ? 'chaoxing'
-    : /(^|\.)beeline-ai\.com$/.test(location.hostname) ? 'beeline' : null;
-
-const CX = {
-    isVideoIframe() { return /\/ananas\/modules\/video\//.test(location.pathname); },
-
-    startVideoFrameLoop() {
-        loadCfg();
-        setInterval(() => { try { CX.videoTick(); } catch (e) {} }, 3000);
-        console.log('[XinweiAutoStudy] chaoxing video frame loop 已启动');
-    },
-    videoTick() {
-        const on = GM_getValue(SK.autoPlay, false);
-        conf.autoPlay = on === true || on === 'true';
-        const speed = parseFloat(GM_getValue(SK.cxSpeed, '2')) || 1;
-        for (const v of document.querySelectorAll('video')) {
-            if (muteEnabled && !v.muted) v.muted = true;
-            if (v.playbackRate !== speed) { try { v.playbackRate = speed; } catch (e) {} }
-            if (conf.autoPlay && !v.ended && v.readyState >= 2 && v.paused) {
-                try { v.play().catch(() => {}); } catch (e) {}
-            }
-            if (!v._xaDone && v.duration > 0 && (v.ended || v.currentTime >= v.duration * 0.92)) {
-                v._xaDone = true;
-                try { window.parent.postMessage({ __xa: 'cx-video-done' }, '*'); } catch (e) {}
-            }
-        }
-        if (conf.autoPlay) {
-            try {
-                document.dispatchEvent(new MouseEvent('mousemove', {
-                    bubbles: true, clientX: 100 + Math.random() * 300, clientY: 100 + Math.random() * 200,
-                }));
-            } catch (e) {}
-        }
-    },
-
-    _lastNext: 0,
-    _nextErrAt: 0,
-    collectVideos(doc, depth) {
-        if (depth > 3) return [];
-        let out = qsa('video', doc);
-        for (const f of qsa('iframe', doc)) {
-            try { if (f.contentDocument) out = out.concat(CX.collectVideos(f.contentDocument, depth + 1)); } catch (e) {}
-        }
-        return out;
-    },
-    tick() {
-        muteAll();
-        if (!/\/mycourse\/studentstudy/.test(location.href)) return;
-        let playing = CX.collectVideos(document, 0).some(v => !v.paused && !v.ended);
-        const rpt = { frame: 0, vid: 0, btn: 0, play: 0 };
-        const visit = (doc, depth) => {
-            if (depth > 3) return;
-            rpt.frame++;
-            for (const v of qsa('video', doc)) {
-                rpt.vid++;
-                if (muteEnabled && !v.muted) v.muted = true;
-                if (v.playbackRate !== conf.cxSpeed) { try { v.playbackRate = conf.cxSpeed; } catch (e) {} }
-                if (conf.autoPlay && !playing && v.paused && !v.ended) {
-                    try { const p = v.play(); if (p && p.catch) p.catch(() => {}); rpt.play++; playing = true; } catch (e) {}
-                }
-                if (!v.paused && !v.ended) playing = true;
-                if (!v._xaDone && v.duration > 0 && (v.ended || v.currentTime >= v.duration * 0.92)) {
-                    v._xaDone = true;
-                    XIA_AI.log('✅ 一个视频已看完（≥92%）', 'ok');
-                    CX.clickNextSection();
-                }
-            }
-            for (const b of qsa('button, [role="button"], [class*="play"], a, div', doc)) {
-                if (qtext(b) !== '播放视频' || !visible(b)) continue;
-                rpt.btn++;
-                if (conf.autoPlay && !playing) { try { b.click(); playing = true; } catch (e) {} }
-            }
-            for (const f of qsa('iframe', doc)) {
-                if (/antispider/i.test(f.src || '')) {
-                    if (!CX._capWarned) {
-                        CX._capWarned = true;
-                        XIA_AI.log('⚠️ 触发平台风控验证码，请人工在页面中输入验证码；通过后挂机自动恢复', 'error');
-                        XIA_AI.progress('⚠️ 等待人工验证码…');
-                    }
-                } else if (depth === 0 || f.src) {
-                    CX._capWarned = false;
-                }
-                try { if (f.contentDocument) visit(f.contentDocument, depth + 1); } catch (e) {}
-            }
-        };
-        visit(document, 0);
-        const now = Date.now();
-        if (now - (CX._rptAt || 0) > 30000) {
-            CX._rptAt = now;
-            XIA_AI.log('🔍 视频扫描: frames=' + rpt.frame + ' videos=' + rpt.vid
-                + ' playBtns=' + rpt.btn + ' playCalls=' + rpt.play
-                + (playing ? ' ▶播放中' : ' ⏸未播放') + ' autoPlay=' + !!conf.autoPlay, 'ai');
-        }
-        if (conf.autoPlay && !playing && now - (CX._idleLogAt || 0) > 60000) {
-            CX._idleLogAt = now;
-            XIA_AI.progress('⏳ 等待视频任务点…');
-        }
-    },
-    bindStudyTop() {
-        window.addEventListener('message', (e) => {
-            if (!e.data || e.data.__xa !== 'cx-video-done') return;
-            CX.clickNextSection();
-        });
-    },
-    clickNextSection() {
-        const now = Date.now();
-        if (now - CX._lastNext < 8000) return;
-        let btn = null;
-        qsa('button, a, [role="button"], [class*="next"], [class*="Next"]').forEach(el => {
-            if (btn || !visible(el)) return;
-            if (qtextAll(el) === '下一节') btn = el;
-        });
-        if (btn) {
-            CX._lastNext = now;
-            XIA_AI.log('▶ 视频已看完（≥92%），点击「下一节」', 'ok');
-            XIA_AI.progress('▶ 跳转下一节…');
-            try { btn.click(); } catch (e) {}
-        } else if (now - CX._nextErrAt > 30000) {
-            CX._nextErrAt = now;
-            XIA_AI.log('未找到「下一节」按钮', 'error');
-        }
-    },
-
-};
-
-const CXQA = {
-    questionRoot() {
-        const roots = qsa('.TiMu').filter(el => visible(el) && el.offsetHeight > 8);
-        if (!roots.length) return null;
-        for (const r of roots) if (!CXQA.isAnswered(r)) return r;
-        return roots[0];
-    },
-    questionType(root) {
-        if (!root) return 'single';
-        const t = qtext(root.querySelector('.fontLabel, [class*="fontLabel"], .Cy_TItle b, .Zy_TItle b'));
-        if (/多选/.test(t)) return 'multi';
-        if (/判断/.test(t)) return 'bool';
-        if (/填空/.test(t)) return 'cloze';
-        if (/简答|论述|名词解释|案例分析|计算题/.test(t)) return 'subjective';
-        return 'single';
-    },
-    isAnswered(root) {
-        if (!root) return false;
-        if (qsa('input[type="radio"], input[type="checkbox"]', root).some(i => i.checked)) return true;
-        if (qsa('li.cur, .check_answer', root).length) return true;
-        const ed = root.querySelector('textarea, [contenteditable="true"]');
-        if (ed) { const t = qtext(ed); return t.length > 0 && !/请输入/.test(t); }
-        return false;
-    },
-    letterOf(label) {
-        const m = qtext(label).match(/^\s*([A-H])(?=[\.\、\s])/i);
-        return m ? m[1].toUpperCase() : null;
-    },
-    allSelected(root, letters) {
-        if (!root) return false;
-        const lis = qsa('ul li', root);
-        return String(letters).toUpperCase().split('').every(ch => {
-            const li = lis.find(l => CXQA.letterOf(l) === ch);
-            return !!li && (li.classList.contains('cur') || !!li.querySelector('input:checked'));
-        });
-    },
-    questionScore(root) {
-        const m = qtext(root).match(/(?:\(|（)\s*(\d+(?:\.\d+)?)\s*分/);
-        return m ? parseFloat(m[1]) : 0;
-    },
-    extractOptions(root) {
-        const opts = [];
-        qsa('ul li', root).forEach(li => {
-            if (!visible(li)) return;
-            const t = qtext(li);
-            const m = t.match(/^([A-H])[\.\、\:\s]*(.+)$/i);
-            if (m) opts.push({ letter: m[1].toUpperCase(), text: m[2].slice(0, 120), node: li });
-        });
-        if (!opts.length) { // 判断题：对/错文本选项，合成 T/F 字母
-            qsa('ul li', root).forEach(li => {
-                if (!visible(li)) return;
-                const t = qtext(li);
-                if (/^(对|正确|√)/.test(t)) opts.push({ letter: 'T', text: t.slice(0, 60), node: li });
-                else if (/^(错|错误|×)/.test(t)) opts.push({ letter: 'F', text: t.slice(0, 60), node: li });
-            });
-        }
-        return opts;
-    },
-    questionTitle(root) {
-        const t = root.querySelector('.Zy_TItle, .Cy_TItle, [class*="TItle"]') || root;
-        return qtext(t)
-            .replace(/^\s*\d+\s*[\.\、\)．]\s*/, '')
-            .replace(/[\(（]\s*\d+(?:\.\d+)?\s*分\s*[\)）]/g, '')
-            .slice(0, 400);
-    },
-    diagnose() {
-        const out = [];
-        const push = s => { out.push(s); XIA_AI.log(s, 'ai'); };
-        push('🩺 超星诊断 ' + location.href.slice(0, 70));
-        const timu = qsa('.TiMu');
-        push('① .TiMu=' + timu.length + ' iframe=' + qsa('iframe').length);
-        const root = CXQA.questionRoot();
-        if (!root) { push('❌ 未定位到题目容器（若在列表页属正常）'); return; }
-        push('② 类型=' + CXQA.questionType(root) + ' 已答=' + CXQA.isAnswered(root) + ' 分值=' + CXQA.questionScore(root));
-        push('③ 题干=' + (CXQA.questionTitle(root) || '(空)').slice(0, 90));
-        const opts = CXQA.extractOptions(root);
-        push('④ 选项=' + opts.length);
-        opts.slice(0, 8).forEach(o => push('  ' + o.letter + ': ' + o.text.slice(0, 45)));
-        push('⑤ 题块HTML前300: ' + root.innerHTML.replace(/\s+/g, ' ').slice(0, 300));
-        console.log('[XIA-diagnose]\n' + out.join('\n'));
-    },
-};
-
-const QA = XA_SITE === 'chaoxing' ? CXQA : {
+const QA = {
     questionRoot, questionType, isAnswered, letterOf, allSelected,
     questionScore, extractOptions, questionTitle,
 };
@@ -450,6 +269,19 @@ function homeworkWalker() {
 function exactText(selector, text) {
     let hit = null;
     qsa(selector).forEach(el => { if (!hit && visible(el) && qtextAll(el) === text) hit = el; });
+    return hit;
+}
+
+function isImageAnswerQuestion(root) {
+    if (!root) return false;
+    const box = (root.closest && root.closest('.question-box')) || root;
+    const text = qtext(box);
+    if (/上传[^。]{0,8}(图片|照片|截图|图像)|(图片|照片|截图|图像)[^。]{0,8}(作答|答题|回答|上传)|拍照上传|拍照作答|以图片形式|手写并?(拍照|上传)/.test(text)) return true;
+    let hit = false;
+    qsa('button, .el-button, a, span, div, [class*="tip"], [class*="hint"]', box).forEach(el => {
+        if (hit || !visible(el)) return;
+        if (/^(上传图片|上传照片|图片上传|拍照上传|点击上传|拍照作答)$/.test(qtextAll(el)) && el.offsetHeight < 80) hit = true;
+    });
     return hit;
 }
 
@@ -570,6 +402,8 @@ const XIA_AI = {
     _walkerEmptyLog: 0,
     _cfgError: null,
     _cfgLogAt: 0,
+    _nextAnswerAt: 0,   // 答题间隔：该时间戳之前不抓答新题
+    _imgLogged: '',
     _bank: null,
     logLines: [],
 
@@ -618,6 +452,34 @@ const XIA_AI = {
             keys.slice(0, keys.length - CFG.BANK_MAX).forEach(k => { delete XIA_AI._bank[k]; });
         }
         try { GM_setValue(SK.bank, JSON.stringify(XIA_AI._bank)); } catch (e) {}
+    },
+
+    imgSkippedHas(hash) {
+        let arr = [];
+        try { arr = JSON.parse(GM_getValue(SK.imgSkipped, '[]')) || []; } catch (e) {}
+        return arr.some(x => x && x.h === hash);
+    },
+    imgSkipRemember(hash, title) {
+        let arr = [];
+        try { arr = JSON.parse(GM_getValue(SK.imgSkipped, '[]')) || []; } catch (e) {}
+        if (arr.some(x => x && x.h === hash)) return;
+        arr.push({ h: hash, q: String(title || '').slice(0, 80), t: Date.now() });
+        if (arr.length > 100) arr = arr.slice(-100);
+        try { GM_setValue(SK.imgSkipped, JSON.stringify(arr)); } catch (e) {}
+    },
+
+    handleImageSkip(q, hash) {
+        XIA_AI.lastQuestionHash = hash; // 阻断同题重复扫描
+        if (XIA_AI._imgLogged !== hash) {
+            XIA_AI._imgLogged = hash;
+            XIA_AI.imgSkipRemember(hash, q.question);
+            XIA_AI.log('🖼️ 该题需要图片作答，已跳过，请人工上传图片: ' + (q.question || '').slice(0, 60), 'error');
+            XIA_AI.progress('🖼️ 图片题已跳过，待人工处理');
+        }
+        const now = Date.now();
+        if (XIA_AI._lastNav && now - XIA_AI._lastNav < 2500) return;
+        XIA_AI._lastNav = now;
+        clickNextQuestionButton();
     },
 
     grabQuestion() {
@@ -851,8 +713,7 @@ const XIA_AI = {
         const qEl = root || QA.questionRoot();
         if (!qEl) { XIA_AI.log('页面已无题目容器，无法点击', 'error'); if (onDone) onDone(false); return; }
         const isMulti = QA.questionType(qEl) === 'multi';
-        const labels = qsa('.el-radio, .el-checkbox', qEl).length ? qsa('.el-radio, .el-checkbox', qEl)
-            : qsa('ul li', qEl).filter(li => QA.letterOf(li) || /^(对|错|正确|错误)/.test(qtext(li))); // chaoxing: ul>li 选项
+        const labels = qsa('.el-radio, .el-checkbox', qEl);
         const arr = String(letters).toUpperCase().replace(/[^A-H]/g, '').split('');
         let i = 0;
         const step = () => {
@@ -866,8 +727,6 @@ const XIA_AI = {
                 const input = hit.querySelector('input[type="radio"], input[type="checkbox"]');
                 if (input && !input.checked) {
                     try { input.click(); } catch (e) { try { XIA_AI.forceClick(hit); } catch (e2) {} }
-                } else if (!input) {
-                    try { XIA_AI.forceClick(hit); } catch (e) {} // chaoxing li 无内部 input
                 }
             } else {
                 const inner = hit.querySelector('.el-radio__inner, .el-checkbox__inner');
@@ -966,6 +825,8 @@ const XIA_AI = {
                 XIA_AI.bankSet(hash, answer); // 成功回填 → 存入答案本
                 XIA_AI.lastQuestionHash = '';
                 XIA_AI.bump('answered');
+                const delay = Math.max(0, parseInt(conf.answerDelay, 10) || 0);
+                if (delay) XIA_AI._nextAnswerAt = Date.now() + delay * 1000;
                 XIA_AI.progress('✅ 已答 ' + XIA_AI.stats.answered + ' 题');
                 XIA_AI.log('回填已生效，跳转下一题', 'ok');
                 clickNextQuestionButton();
@@ -1007,7 +868,7 @@ const XIA_AI = {
         XIA_AI.progress('📝 自动提交中…');
         try { btn.click(); } catch (e) {}
         setTimeout(() => {
-            const pops = qsa('.el-message-box, .el-dialog, .el-popconfirm, [class*="dialog"], [class*="popup"], [class*="maskdiv"], [class*="mask_"]').filter(visible);
+            const pops = qsa('.el-message-box, .el-dialog, .el-popconfirm, [class*="dialog"], [class*="popup"]').filter(visible);
             if (pops.length) {
                 const msg = pops.map(d => qtextAll(d)).join(' ');
                 if (/未(作答|回答|完成)|尚未(作答|完成)|还有\d*题|请(先)?(答完|完成所有|作答)/.test(msg)) {
@@ -1052,6 +913,10 @@ const XIA_AI = {
             XIA_AI.log('当前页面未找到可答题目', 'error');
             return;
         }
+        if (isImageAnswerQuestion(q.node)) {
+            XIA_AI.log('🖼️ 该题需要图片作答，请人工上传图片', 'error');
+            return;
+        }
         XIA_AI.answeringOnce = true;
         XIA_AI.log('🎯 单次答题: ' + q.question.slice(0, 60) + (q.question.length > 60 ? '…' : ''), 'ok');
         XIA_AI.callAI(q, answer => {
@@ -1080,6 +945,11 @@ const XIA_AI = {
         try { if (homeworkWalker()) return; } catch (e) { console.log('[XIA-walker] 异常', e); }
         if (XIA_AI._donePage && (location.hash + location.pathname) === XIA_AI._donePage) return; // 本卷刚提交成功，等 walker 接管
 
+        if (XIA_AI._nextAnswerAt && Date.now() < XIA_AI._nextAnswerAt) {
+            XIA_AI.progress('⏳ 答题间隔 ' + Math.ceil((XIA_AI._nextAnswerAt - Date.now()) / 1000) + 's');
+            return;
+        }
+
         const q = XIA_AI.grabQuestion();
         if (!q || !q.question) return;
         if (q.type !== 'subjective' && q.type !== 'cloze' && q.options.length === 0) return;
@@ -1102,6 +972,11 @@ const XIA_AI = {
             XIA_AI.lastQuestionHash = '';
             XIA_AI.log('题目已作答，跳到下一题', 'info');
             clickNextQuestionButton();
+            return;
+        }
+
+        if (isImageAnswerQuestion(q.node) || XIA_AI.imgSkippedHas(hash)) {
+            XIA_AI.handleImageSkip(q, hash);
             return;
         }
 
@@ -1134,6 +1009,8 @@ const XIA_AI = {
                     if (ok) {
                         XIA_AI.bankSet(hash, ans);
                         XIA_AI.bump('answered');
+                        const delay = Math.max(0, parseInt(conf.answerDelay, 10) || 0);
+                        if (delay) XIA_AI._nextAnswerAt = Date.now() + delay * 1000;
                         XIA_AI.progress('✅ 已答 ' + XIA_AI.stats.answered + ' 题');
                         XIA_AI.log('主观题答案已填入，2s 后跳转下一题', 'ok');
                         setTimeout(() => { clickNextQuestionButton(); XIA_AI.answering = false; }, 2000);
@@ -1160,7 +1037,6 @@ const XIA_AI = {
     },
 
     diagnose() {
-        if (XA_SITE === 'chaoxing') { CXQA.diagnose(); return; }
         const out = [];
         const push = s => { out.push(s); XIA_AI.log(s, 'ai'); };
         push('🩺 诊断 ' + location.href.slice(0, 70));
@@ -1241,6 +1117,7 @@ const PANEL_CSS = `
 .xa-input{width:100%;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;font-size:12px;
   font-family:inherit;outline:none;transition:border-color .2s;box-sizing:border-box;}
 .xa-input:focus{border-color:#3b82f6;box-shadow:0 0 0 2px rgba(59,130,246,.12);}
+.xa-ai-inputs{display:flex;flex-direction:column;gap:8px;}
 .xa-row{display:flex;align-items:center;gap:8px;}
 .xa-switch{position:relative;width:42px;height:22px;border-radius:11px;background:#d1d5db;cursor:pointer;transition:background .2s;flex-shrink:0;}
 .xa-switch.on{background:linear-gradient(135deg,#10b981,#059669);}
@@ -1331,12 +1208,6 @@ function buildPanel() {
       <div class="xa-switch" id="xa-autoplay-switch" title="开启自动刷课"></div>
     </div>
     <button class="xa-btn xa-mute">🔇 关闭静音</button>
-    <select class="xa-input" id="xa-cx-speed" title="超星视频倍速（芯位不受影响）">
-      <option value="1">超星倍速：1x（正常）</option>
-      <option value="1.25">超星倍速：1.25x</option>
-      <option value="1.5">超星倍速：1.5x</option>
-      <option value="2">超星倍速：2x（平台上限）</option>
-    </select>
   </div>
   <!-- Tab 2: AI 答题 -->
   <div class="xa-tab-pane" data-pane="ai">
@@ -1376,6 +1247,10 @@ function buildPanel() {
     <div class="xa-row">
       <div class="xa-switch" id="xa-autosubmit-switch" title="全部答完后自动提交作业（含未答题保护）"></div>
       <span style="font-size:12px;color:#374151;font-weight:600;">答完自动提交作业</span>
+    </div>
+    <div class="xa-row" style="justify-content:space-between;">
+      <span style="font-size:12px;color:#374151;font-weight:600;">答题间隔（秒）</span>
+      <input class="xa-input" id="xa-answer-delay" type="number" min="0" max="600" step="1" style="width:76px;padding:5px 8px;" title="每答完一题后等待的秒数再答下一题，0 = 不等待" />
     </div>
   </div>
   <!-- Tab 3: 关于 -->
@@ -1467,6 +1342,7 @@ function bindUI() {
     const searchApiKeyInput = $('#xa-search-key');
     const autoSwitch = $('#xa-autoanswer-switch');
     const playSwitch = $('#xa-autoplay-switch');
+    const answerDelayInput = $('#xa-answer-delay');
 
     qsa('.xa-tab').forEach(tab => {
         tab.addEventListener('click', () => {
@@ -1503,6 +1379,7 @@ function bindUI() {
     saveInput('searchMode', searchModeInput);
     saveInput('searchProvider', searchProviderInput);
     saveInput('searchApiKey', searchApiKeyInput);
+    saveInput('answerDelay', answerDelayInput);
 
     apikeyInput.addEventListener('input', () => {
         conf.apiKey = apikeyInput.value.trim();
@@ -1515,6 +1392,7 @@ function bindUI() {
     searchModeInput.value = conf.searchMode;
     searchProviderInput.value = conf.searchProvider;
     searchApiKeyInput.value = conf.searchApiKey;
+    answerDelayInput.value = conf.answerDelay;
     setAIStatus(conf.apiKey ? true : null, conf.apiKey ? 'AI 引擎已就绪' : '等待配置 Key');
 
     autoSwitch.addEventListener('click', () => {
@@ -1565,16 +1443,6 @@ function bindUI() {
         refreshPlaySwitch();
     });
 
-    const cxSpeedInput = $('#xa-cx-speed');
-    if (cxSpeedInput) {
-        cxSpeedInput.value = String(conf.cxSpeed);
-        cxSpeedInput.addEventListener('change', () => {
-            conf.cxSpeed = parseFloat(cxSpeedInput.value) || 1;
-            GM_setValue(SK.cxSpeed, String(conf.cxSpeed));
-            XIA_AI.log('超星倍速已设为 ' + conf.cxSpeed + 'x（芯位视频不受影响）', 'ok');
-        });
-    }
-
     $('#xa-answer-once').addEventListener('click', e => {
         const b = e.currentTarget;
         b.disabled = true;
@@ -1596,7 +1464,7 @@ function bindUI() {
     muteBtn.addEventListener('click', () => {
         muteEnabled = !muteEnabled;
         if (muteEnabled) { muteAll(); muteBtn.classList.remove('muted'); muteBtn.textContent = '🔇 关闭静音'; }
-        else { document.querySelectorAll('video').forEach(v => { if (v.muted) v.muted = false; }); muteBtn.classList.add('muted'); muteBtn.textContent = '🔊 开启声音'; }
+        else { document.querySelectorAll('video, audio').forEach(v => { if (v.muted) v.muted = false; }); muteBtn.classList.add('muted'); muteBtn.textContent = '🔊 开启声音'; }
     });
 
     XIA_AI.bump(); // 初始化统计显示
@@ -1696,7 +1564,6 @@ function navigateToNextSection() {
 
 function mainTick() {
     tick++;
-    if (XA_SITE === 'chaoxing') { CX.tick(); return; } // 超星：视频由播放器帧驱动，top 只静音兜底
     muteAll();
     keepPlay();
     if (tick % 10 === 0) {
@@ -1732,11 +1599,11 @@ function stopAuto() {
 function initPopupAutoReload() {
     const RELOAD_COOLDOWN = 20000; // 20s 冷却，防止刷新死循环
     setInterval(() => {
-        const last = Number(GM_getValue('xa_last_reload_at', 0));
+        const last = Number(GM_getValue(SK.lastReload, 0));
         if (Date.now() - last < RELOAD_COOLDOWN) return;
         const text = (document.body && document.body.innerText) || '';
         if (text.indexOf('学习状态异常') !== -1 || text.indexOf('请刷新后继续学习') !== -1) {
-            GM_setValue('xa_last_reload_at', Date.now());
+            GM_setValue(SK.lastReload, Date.now());
             console.log('[芯位] 检测到学习状态异常弹窗，3秒后自动刷新页面');
             setTimeout(() => { location.reload(); }, 3000);
         }
@@ -1746,16 +1613,9 @@ function initPopupAutoReload() {
 if (window.xaScriptLoaded) return;
 window.xaScriptLoaded = true;
 
-if (!XA_SITE) return;
-
-if (window.self !== window.top) {
-    if (XA_SITE === 'chaoxing' && CX.isVideoIframe()) CX.startVideoFrameLoop();
-    return;
-}
+if (window.self !== window.top) return;
 
 loadCfg();
-
-if (XA_SITE === 'chaoxing') CX.bindStudyTop();
 
 buildPanel();
 makeDraggable(panel, panel.querySelector('.xa-header'));
@@ -1767,6 +1627,7 @@ if (GM_getValue(SK.minimized, false)) {
     mini.classList.add('show');
 }
 
+installMute();
 muteAll();
 
 XIA_AI.log('本脚本以 MIT 协议开源发布，详见仓库 LICENSE。请遵守平台规则与当地法律使用。', 'info');

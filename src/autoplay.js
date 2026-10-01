@@ -95,7 +95,6 @@ function navigateToNextSection() {
 
 function mainTick() {
     tick++;
-    if (XA_SITE === 'chaoxing') { CX.tick(); return; } // 超星：视频由播放器帧驱动，top 只静音兜底
     muteAll();
     keepPlay();
     if (tick % 10 === 0) {

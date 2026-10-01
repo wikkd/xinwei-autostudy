@@ -12,7 +12,7 @@ const CFG = {
     DEFAULT_API_BASE: 'https://api.deepseek.com',
     DEFAULT_MODEL: 'deepseek-chat',
     DEFAULT_SEARCH_PROVIDER: 'duckduckgo', // duckduckgo(免密钥) / tavily(需Key)
-    DEFAULT_SEARCH_MODE: 'auto',           // off / auto / always
+    DEFAULT_SEARCH_MODE: 'off',            // off / auto / always；默认 off：检索会向外部引擎发送题目内容，风险项用户显式开启
     SEARCH_MAX_CHARS: 3000,
 };
 
@@ -21,10 +21,12 @@ const SK = {
     apiKey: 'xa_apikey', apiBase: 'xa_apibase', model: 'xa_model',
     autoAnswer: 'xa_autoanswer', autoPlay: 'xa_autoplay', autoSubmit: 'xa_autosubmit',
     searchProvider: 'xa_search_provider', searchApiKey: 'xa_search_key', searchMode: 'xa_search_mode',
-    cxSpeed: 'xa_cx_speed',     // 超星视频倍速（1/1.25/1.5/2，仅 chaoxing 生效；芯位不变速）
     bank: 'xa_answer_bank',     // 答案本：题目hash -> {a:答案, t:时间}
     panelPos: 'xa_panel_pos',   // 面板/迷你球拖动位置
     minimized: 'xa_minimized',  // 面板是否处于最小化
+    lastReload: 'xa_last_reload_at', // 异常弹窗自动刷新的冷却时间戳
+    answerDelay: 'xa_answer_delay',  // 答题间隔秒数（0=不等待）
+    imgSkipped: 'xa_img_skipped',    // 图片作答题跳过记录（hash→题干摘要）
 };
 
 let conf = {};
@@ -38,10 +40,11 @@ function loadCfg() {
         model: g(SK.model, CFG.DEFAULT_MODEL),
         autoAnswer: b(g(SK.autoAnswer, false)),
         autoPlay: b(g(SK.autoPlay, false)),
-        autoSubmit: b(g(SK.autoSubmit, true)),
+        // 默认关闭：自动提交影响真实成绩，属高风险项
+        autoSubmit: b(g(SK.autoSubmit, false)),
         searchProvider: g(SK.searchProvider, CFG.DEFAULT_SEARCH_PROVIDER),
         searchApiKey: g(SK.searchApiKey, ''),
+        answerDelay: String(g(SK.answerDelay, '0')),
         searchMode: g(SK.searchMode, CFG.DEFAULT_SEARCH_MODE),
-        cxSpeed: parseFloat(g(SK.cxSpeed, '2')) || 2, // 默认 2x（平台开放上限）
     };
 }
