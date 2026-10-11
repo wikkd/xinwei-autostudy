@@ -14,6 +14,8 @@ const CFG = {
     STALL_RELOAD_SEC: 120,  // 卡死且重点播无效：连续 N 秒无推进 → 静默 reload（共用 refresh 冷却）
     PPT_LOAD_GRACE_MS: 4000,// PPT/静态课件等待 iframe 就绪的宽限时常（防白页空跳），就绪后才开始计 DWELL
     UNLOCK_CHECK_MS: 600000,// 锁定章守望检查间隔（10 分钟）：所有节完成后仍有未开放章时，定期复查是否解锁
+    DEADLINE_WARN_DAYS: 3,  // 作业截止提醒阈值：未完成作业距截止 ≤N 天时在面板提醒（≤24h 升级为紧急）
+    DEADLINE_CHECK_MS: 1800000, // 截止检查间隔（30 分钟，GM 时间戳节流，跨刷新生效）
 
     DEFAULT_API_BASE: 'https://api.deepseek.com',
     DEFAULT_MODEL: 'deepseek-chat',
@@ -34,6 +36,8 @@ const SK = {
     unlockWatch: 'xa_unlock_watch_at', // 章节解锁守望：到点静默刷新复查开放状态的时间戳
     answerDelay: 'xa_answer_delay',  // 答题间隔秒数（0=不等待）
     imgSkipped: 'xa_img_skipped',    // 图片作答题跳过记录（hash→题干摘要）
+    deadlineLastAt: 'xa_deadline_last_at',   // 截止检查上次时间戳（30 分钟节流）
+    deadlineSummary: 'xa_deadline_summary',  // 最近一次截止检查结果（刷新后横幅免请求展示）
 };
 
 let conf = {};

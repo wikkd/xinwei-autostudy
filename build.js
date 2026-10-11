@@ -51,6 +51,7 @@ const BODY_ORDER = [
     'ui.js',
     'autoplay.js',
     'popup.js',
+    'deadline.js',
     'bootstrap.js',
 ];
 

@@ -47,9 +47,11 @@ const MUST = [
     '.el-menu-item.is-active', '.done-icon', '.inProgress-icon', '.unStart-icon',
     'disable-menu', '.vjs-play-control', '观看下一章节',
     // 存储键（GM）
-    'xa_unlock_watch_at', 'xa_confirm_answer',
+    'xa_unlock_watch_at', 'xa_confirm_answer', 'xa_deadline_summary',
     // 视频内弹题（popup.js，chunk 逆向 DOM 契约）
     '.popup-topic-dialog', '.option-item', 'icon-close', '弹题',
+    // 作业截止提醒（deadline.js，接口契约沿用 harvest 真机校准配方）
+    'queryLearnCoursePage', 'getHomeworkList', '检查作业截止',
     // 端点
     'api.deepseek.com',
     // UI 文案（面板/日志/提交安全）

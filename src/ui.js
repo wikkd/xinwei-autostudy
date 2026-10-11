@@ -66,6 +66,9 @@ const PANEL_CSS = `
   padding:6px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .xa-stats{font-size:11px;color:#64748b;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
   padding:6px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.xa-deadline{font-size:11px;line-height:1.6;color:#b45309;background:#fffbeb;border:1px solid #fde68a;
+  border-radius:8px;padding:6px 8px;word-break:break-word;}
+.xa-deadline.urgent{color:#b91c1c;background:#fef2f2;border-color:#fecaca;}
 .xa-loghead{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:#6b7280;font-weight:700;}
 .xa-loghead button{border:none;background:#f3f4f6;color:#6b7280;font-size:11px;border-radius:6px;padding:3px 10px;cursor:pointer;transition:background .2s;}
 .xa-loghead button:hover{background:#e5e7eb;color:#374151;}
@@ -126,11 +129,13 @@ function buildPanel() {
   <div class="xa-tab-pane active" data-pane="cfg">
     <div class="xa-status" id="xa-status">状态：就绪</div>
     <div class="xa-stats" id="xa-course-progress" style="display:none;"></div>
+    <div class="xa-deadline" id="xa-deadline" style="display:none;"></div>
     <div class="xa-row" style="justify-content:space-between;">
       <span style="font-size:12px;color:#374151;font-weight:600;">全自动刷课</span>
       <div class="xa-switch" id="xa-autoplay-switch" title="开启自动刷课"></div>
     </div>
     <button class="xa-btn xa-mute">🔇 关闭静音</button>
+    <button class="xa-btn xa-stop" id="xa-deadline-btn" title="立即检查全部在学课程的未完成作业截止时间（平时每 30 分钟自动检查）">⏰ 检查作业截止</button>
   </div>
   <!-- Tab 2: AI 答题 -->
   <div class="xa-tab-pane" data-pane="ai">
@@ -435,6 +440,12 @@ function bindUI() {
                 done(ok);
             } catch (err) { done(false); }
         }
+    });
+
+    // 截止检查按钮：立即拉取一次（跳过 30 分钟节流）
+    $('#xa-deadline-btn').addEventListener('click', () => {
+        XIA_AI.log('⏰ 正在检查各课程作业截止时间…', 'info');
+        deadlineCheck(true);
     });
 
     // 静音按钮
