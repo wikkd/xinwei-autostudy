@@ -26,6 +26,7 @@ const CFG = {
 const SK = {
     apiKey: 'xa_apikey', apiBase: 'xa_apibase', model: 'xa_model',
     autoAnswer: 'xa_autoanswer', autoPlay: 'xa_autoplay', autoSubmit: 'xa_autosubmit',
+    confirmAnswer: 'xa_confirm_answer', // 答题确认模式：AI 填完暂停，人工核对后自行跳题/提交
     searchProvider: 'xa_search_provider', searchApiKey: 'xa_search_key', searchMode: 'xa_search_mode',
     panelPos: 'xa_panel_pos',   // 面板/迷你球拖动位置
     minimized: 'xa_minimized',  // 面板是否处于最小化
@@ -48,6 +49,8 @@ function loadCfg() {
         autoPlay: b(g(SK.autoPlay, false)),
         // 默认关闭：自动提交影响真实成绩，属高风险项
         autoSubmit: b(g(SK.autoSubmit, false)),
+        // 默认关闭：开启后 AI 填完答案即暂停，人工核对后自行翻题/提交
+        confirmAnswer: b(g(SK.confirmAnswer, false)),
         searchProvider: g(SK.searchProvider, CFG.DEFAULT_SEARCH_PROVIDER),
         searchApiKey: g(SK.searchApiKey, ''),
         answerDelay: String(g(SK.answerDelay, '0')),

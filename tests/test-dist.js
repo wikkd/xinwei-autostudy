@@ -47,7 +47,9 @@ const MUST = [
     '.el-menu-item.is-active', '.done-icon', '.inProgress-icon', '.unStart-icon',
     'disable-menu', '.vjs-play-control', '观看下一章节',
     // 存储键（GM）
-    'xa_unlock_watch_at',
+    'xa_unlock_watch_at', 'xa_confirm_answer',
+    // 视频内弹题（popup.js，chunk 逆向 DOM 契约）
+    '.popup-topic-dialog', '.option-item', 'icon-close', '弹题',
     // 端点
     'api.deepseek.com',
     // UI 文案（面板/日志/提交安全）

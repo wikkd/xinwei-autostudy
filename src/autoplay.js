@@ -392,6 +392,46 @@ function installVideoHooks() {
     } catch (e) {}
 }
 
+// ===== 面板课程进度（X/Y 节 · 剩余视频时长估算）=====
+// 数据源：侧边栏目录（frontend-map 3.3 实证结构）。
+//   节数：.section-area 所在 li（排除锁定章 .disable-menu）；
+//   剩余时长：未完成节（inProgress/unStart 图标）的时长文本（mm:ss / h:mm:ss）求和，按 1x 播放估算。
+// 未展开章的节不在 DOM 里（计入会偏小），无法读到目录时整行隐藏；10s 缓存防每 tick 全量解析。
+let _progCacheAt = 0, _progCacheText = '';
+function updateCourseProgress() {
+    const el = document.getElementById('xa-course-progress');
+    if (!el) return;
+    const now = Date.now();
+    if (now - _progCacheAt < 10000) {
+        if (_progCacheText) el.textContent = _progCacheText;
+        return;
+    }
+    _progCacheAt = now;
+    _progCacheText = '';
+    const secs = qsa('.section-area').map(sa => sa.closest('li')).filter(li => li && !(li.closest && li.closest('.el-sub-menu.disable-menu')));
+    if (secs.length < 2) { el.style.display = 'none'; return; }
+    let done = 0, remainSec = 0;
+    for (const li of secs) {
+        const complete = !!li.querySelector('.done-icon, .icon-done, .el-icon-check, .el-icon-circle-check, .el-icon-check-circle, .is-done');
+        if (complete) { done++; continue; }
+        if (!li.querySelector('.inProgress-icon, .unStart-icon')) continue; // PPT/文档等无完成态的节不计时长
+        const txt = qtext(li.querySelector('.section-area') || li);
+        const m = txt.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/g);
+        if (!m) continue;
+        const parts = m[m.length - 1].split(':').map(Number); // 取最后一段匹配（时长通常在节名之后）
+        remainSec += parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + parts[1];
+    }
+    let text = '📚 课程进度 ' + done + '/' + secs.length + ' 节';
+    if (remainSec > 0) {
+        const h = Math.floor(remainSec / 3600), mnt = Math.floor((remainSec % 3600) / 60);
+        const est = h > 0 ? h + ' 小时' + (mnt > 0 ? ' ' + mnt + ' 分' : '') : (mnt > 0 ? mnt + ' 分' : '<1 分');
+        text += ' · 剩余视频约 ' + est + '（按 1x 计）';
+    }
+    _progCacheText = text;
+    el.textContent = text;
+    el.style.display = '';
+}
+
 function mainTick() {
     tick++;
     muteAll();
@@ -399,6 +439,7 @@ function mainTick() {
     verifyNavLanding();
     videoStallCheck();
     checkUnlockWatch();
+    if (tick % 4 === 0) updateCourseProgress();
     if (tick % 10 === 0) {
         const active = document.querySelector('li.el-menu-item.is-active');
         const cur = active ? (active.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 20) : '(无)';
@@ -406,10 +447,10 @@ function mainTick() {
         const vid = watchingVideo();
         const pct = vid && vid.duration > 0 ? Math.floor(vid.currentTime / vid.duration * 100) : null;
         console.log('[芯位] #' + tick + ' | 当前: "' + cur + '"' + (pct != null ? ' | 已观看 ' + pct + '%' : '') + ' | cd=' + cd + 's | 连跳=' + consecutiveJumps);
-        // 面板进度：仅在答题/扫描/配置告警闲置时由挂机更新（避免覆盖 📋/📡/⛔ 等关键信息）
+        // 面板进度：仅在答题/扫描/配置告警/确认等待闲置时由挂机更新（避免覆盖 📋/📡/⛔/⏸ 等关键信息）
         const pel = document.getElementById('xa-progress');
         const ptxt = pel ? (pel.textContent || '') : '';
-        if (!XIA_AI.answering && !XIA_AI.answeringOnce && !XIA_AI._cfgError && ptxt.indexOf('⏳') !== 0) {
+        if (!XIA_AI.answering && !XIA_AI.answeringOnce && !XIA_AI._cfgError && ptxt.indexOf('⏳') !== 0 && ptxt.indexOf('⏸') !== 0) {
             XIA_AI.progress('▶ ' + cur + (pct != null ? ' · 已观看 ' + pct + '%' : ''));
         }
     }

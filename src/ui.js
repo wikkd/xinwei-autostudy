@@ -125,6 +125,7 @@ function buildPanel() {
   <!-- Tab 1: 挂机配置 -->
   <div class="xa-tab-pane active" data-pane="cfg">
     <div class="xa-status" id="xa-status">状态：就绪</div>
+    <div class="xa-stats" id="xa-course-progress" style="display:none;"></div>
     <div class="xa-row" style="justify-content:space-between;">
       <span style="font-size:12px;color:#374151;font-weight:600;">全自动刷课</span>
       <div class="xa-switch" id="xa-autoplay-switch" title="开启自动刷课"></div>
@@ -135,7 +136,7 @@ function buildPanel() {
   <div class="xa-tab-pane" data-pane="ai">
     <div class="xa-status" id="xa-ai-status"><span class="xa-led" id="xa-ai-led"></span><span id="xa-ai-status-text">等待配置 Key</span></div>
     <div class="xa-progress" id="xa-progress">待机中</div>
-    <div class="xa-stats" id="xa-stats">已答 0 · 缓存命中 0 · 已提交 0</div>
+    <div class="xa-stats" id="xa-stats">已答 0 · 已提交 0</div>
     <div class="xa-sec">🔌 接口配置</div>
     <div class="xa-ai-inputs">
       <input class="xa-input" id="xa-apikey" type="password" placeholder="API Key（sk-xxxxxxxx）" />
@@ -170,6 +171,10 @@ function buildPanel() {
       <div class="xa-switch" id="xa-autosubmit-switch" title="全部答完后自动提交作业（含未答题保护）"></div>
       <span style="font-size:12px;color:#374151;font-weight:600;">答完自动提交作业</span>
     </div>
+    <div class="xa-row">
+      <div class="xa-switch" id="xa-confirm-switch" title="AI 填完答案即暂停：人工核对后自行翻题/提交，脚本不代跳不代交"></div>
+      <span style="font-size:12px;color:#374151;font-weight:600;">答题确认（填完暂停待核对）</span>
+    </div>
     <div class="xa-row" style="justify-content:space-between;">
       <span style="font-size:12px;color:#374151;font-weight:600;">答题间隔（秒）</span>
       <input class="xa-input" id="xa-answer-delay" type="number" min="0" max="600" step="1" style="width:76px;padding:5px 8px;" title="每答完一题后等待的秒数再答下一题，0 = 不等待" />
@@ -191,7 +196,7 @@ function buildPanel() {
     </div>
   </div>
   <!-- 共享日志框 -->
-  <div class="xa-loghead"><span>📜 运行日志</span><button id="xa-clear-log">清空</button></div>
+  <div class="xa-loghead"><span>📜 运行日志</span><span><button id="xa-copy-log">复制</button> <button id="xa-clear-log">清空</button></span></div>
   <div class="xa-ai-log" id="xa-ai-log"><div style="color:#94a3b8;">等待操作...</div></div>
 </div>`;
     document.body.appendChild(panel);
@@ -357,6 +362,23 @@ function bindUI() {
         }
     }
 
+    // 答题确认开关（默认关闭）：开启后 AI 填完暂停，人工核对后自行操作
+    const confirmSwitch = $('#xa-confirm-switch');
+    confirmSwitch.addEventListener('click', () => {
+        conf.confirmAnswer = !conf.confirmAnswer;
+        GM_setValue(SK.confirmAnswer, conf.confirmAnswer);
+        refreshConfirmSwitch();
+    });
+    function refreshConfirmSwitch() {
+        if (conf.confirmAnswer) {
+            confirmSwitch.classList.add('on');
+            XIA_AI.log('答题确认已开启：AI 填完暂停，人工核对后自行翻题/提交（自动提交停用）', 'ok');
+        } else {
+            confirmSwitch.classList.remove('on');
+            XIA_AI.log('答题确认已关闭', 'info');
+        }
+    }
+
     // 挂机开关：独立控制主循环
     function refreshPlaySwitch() {
         if (conf.autoPlay) {
@@ -392,6 +414,29 @@ function bindUI() {
         if (box) box.innerHTML = '<div style="color:#94a3b8;">日志已清空</div>';
     });
 
+    // 复制日志（诊断反馈用）：优先 Clipboard API，降级 execCommand
+    $('#xa-copy-log').addEventListener('click', e => {
+        const btn = e.currentTarget;
+        const text = XIA_AI.logLines.map(l => l.text).join('\n');
+        const done = ok => {
+            btn.textContent = ok ? '已复制' : '复制失败';
+            setTimeout(() => { btn.textContent = '复制'; }, 1500);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+        } else {
+            try {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                document.body.appendChild(ta);
+                ta.select();
+                const ok = document.execCommand('copy');
+                document.body.removeChild(ta);
+                done(ok);
+            } catch (err) { done(false); }
+        }
+    });
+
     // 静音按钮
     const muteBtn = $('.xa-mute');
     muteBtn.addEventListener('click', () => {
@@ -404,4 +449,5 @@ function bindUI() {
     refreshPlaySwitch();
     refreshAISwitch();
     refreshSubmitSwitch();
+    refreshConfirmSwitch();
 }

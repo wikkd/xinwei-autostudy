@@ -26,7 +26,8 @@ muteAll();
 // MIT 一句话提示（替代原拦截式免责弹窗）
 XIA_AI.log('本脚本以 MIT 协议开源发布，详见仓库 LICENSE。请遵守平台规则与当地法律使用。', 'info');
 
-// 启动「学习状态异常」弹窗自动刷新
+// 启动「学习状态异常」弹窗自动刷新 + 视频内弹题自动作答
 initPopupAutoReload();
+initMarkerQuestion();
 
 console.log('[XinweiAutoStudy] 已加载 v__XA_VERSION__');

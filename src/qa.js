@@ -542,9 +542,15 @@ const XIA_AI = {
             if (ok) {
                 XIA_AI._failHash = '';
                 XIA_AI._failCount = 0;
-                XIA_AI.lastQuestionHash = '';
                 XIA_AI.bump('answered');
                 XIA_AI._answerGap();
+                if (conf.confirmAnswer) { // 确认模式：填完即停，人工核对后自行翻题/提交（保留 hash 防重答）
+                    XIA_AI.log('⏸ 确认模式：答案已填入，请人工核对后自行点击下一题或提交', 'info');
+                    XIA_AI.progress('⏸ 已填入，待人工确认');
+                    XIA_AI.answering = false;
+                    return;
+                }
+                XIA_AI.lastQuestionHash = '';
                 XIA_AI.log('回填已生效，跳转下一题', 'ok');
                 clickNextQuestionButton();
                 XIA_AI.answering = false;
@@ -567,7 +573,9 @@ const XIA_AI = {
 
     // 答完自动提交作业：点「提交作业」并自动确认；弹窗提示有未答题时取消并留给人工。
     // 仅精确匹配「提交作业」按钮，绝不触碰考试类的「交卷/提交试卷」。30s 节流，可反复重试。
+    // 确认模式下整体停用：提交这一步正是人工把关的最后一道闸。
     tryAutoSubmit() {
+        if (conf.confirmAnswer) return;
         const now = Date.now();
         if (XIA_AI._submitting) return;
         if (XIA_AI._lastSubmitTry && now - XIA_AI._lastSubmitTry < 30000) return;
@@ -683,6 +691,7 @@ const XIA_AI = {
 
         // 已作答：跳到下一题（questionRoot 优先返回未答题，此处多为最后一题或翻页失败）
         if (QA.isAnswered(q.node)) {
+            if (conf.confirmAnswer) return; // 确认模式：翻题/提交权留给人工，脚本不代跳
             const now = Date.now();
             if (XIA_AI._lastNav && now - XIA_AI._lastNav < 2500) return;
             if (XIA_AI._skipHash === hash) XIA_AI._skipCount++;
@@ -730,6 +739,12 @@ const XIA_AI = {
                     if (ok) {
                         XIA_AI.bump('answered');
                         XIA_AI._answerGap();
+                        if (conf.confirmAnswer) { // 确认模式：主观题人工核对修改，不代跳
+                            XIA_AI.log('⏸ 确认模式：主观题答案已填入，请人工核对修改', 'info');
+                            XIA_AI.progress('⏸ 已填入，待人工确认');
+                            XIA_AI.answering = false;
+                            return;
+                        }
                         XIA_AI.log('主观题答案已填入，2s 后跳转下一题', 'ok');
                         setTimeout(() => { clickNextQuestionButton(); XIA_AI.answering = false; }, 2000);
                     } else {
