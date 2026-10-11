@@ -7,7 +7,13 @@ const CFG = {
     MIN_WATCH: 30,          // 启动后最少观看秒数（防过早跳章）
     COOLDOWN: 15,           // 跳章后冷却秒数
     INTERVAL: 3,            // 主循环 / 题目扫描间隔（秒）
-    BANK_MAX: 400,          // 答案本最大条数（超出淘汰最早的）
+    WATCH_DONE_PCT: 0.96,   // 视频完成判定阈值：currentTime >= duration*比值 即算看完。
+                            // 平台规则「需观看 95% 计入完成」（frontend-map 实证），取 0.96 留 1% 余量
+                            // 防心跳竞态；同时覆盖流尾部挂起（卡 99.x% 永不 ended）的场景
+    STALL_SEC: 45,          // 视频卡死判定：currentTime 连续 N 秒无推进 → 阶梯恢复（重点播 → reload）
+    STALL_RELOAD_SEC: 120,  // 卡死且重点播无效：连续 N 秒无推进 → 静默 reload（共用 refresh 冷却）
+    PPT_LOAD_GRACE_MS: 4000,// PPT/静态课件等待 iframe 就绪的宽限时常（防白页空跳），就绪后才开始计 DWELL
+    UNLOCK_CHECK_MS: 600000,// 锁定章守望检查间隔（10 分钟）：所有节完成后仍有未开放章时，定期复查是否解锁
 
     DEFAULT_API_BASE: 'https://api.deepseek.com',
     DEFAULT_MODEL: 'deepseek-chat',
@@ -21,10 +27,10 @@ const SK = {
     apiKey: 'xa_apikey', apiBase: 'xa_apibase', model: 'xa_model',
     autoAnswer: 'xa_autoanswer', autoPlay: 'xa_autoplay', autoSubmit: 'xa_autosubmit',
     searchProvider: 'xa_search_provider', searchApiKey: 'xa_search_key', searchMode: 'xa_search_mode',
-    bank: 'xa_answer_bank',     // 答案本：题目hash -> {a:答案, t:时间}
     panelPos: 'xa_panel_pos',   // 面板/迷你球拖动位置
     minimized: 'xa_minimized',  // 面板是否处于最小化
     lastReload: 'xa_last_reload_at', // 异常弹窗自动刷新的冷却时间戳
+    unlockWatch: 'xa_unlock_watch_at', // 章节解锁守望：到点静默刷新复查开放状态的时间戳
     answerDelay: 'xa_answer_delay',  // 答题间隔秒数（0=不等待）
     imgSkipped: 'xa_img_skipped',    // 图片作答题跳过记录（hash→题干摘要）
 };

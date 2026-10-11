@@ -1,24 +1,10 @@
 // ==================== AI 答题核心 ====================
-// 注：命名 XIA_AI 而非 AI，避免与页面既有 AI 标识符冲突
+// 注：命名 XIA_AI 而非 AI，避免与页面既有 AI 标识符冲突。
+// 职责：状态机 / 答案本 / LLM 调用与解析 / 回填与校验 / 提交 / 作业巡航。
+// 平台 DOM 解析见 sites.js；视频挂机见 autoplay.js。
 
-// 芯位/beeline-ai 题目容器选择器（作业/考试组件根，由线上 DOM 反推）
-const XIA_QROOT = '.homework-single-selected, .homework-multiple-selected, .homework-true-or-false, .homework-cloze, .homework-question-editor';
 
-// 点击「下一题/下一个」按钮：优先专用 toggle 按钮，其次任意按钮文本匹配；错误提示 10s 节流
-function clickNextQuestionButton() {
-    const hit = el => /下一题|下一个/.test(qtext(el)) && !/上一题|提交|交卷|作业|保存/.test(qtext(el));
-    let btn = null;
-    for (const t of qsa('.toggle-button')) if (hit(t)) { btn = t; break; }
-    if (!btn) for (const t of qsa('button, [role="button"], [class*="next"]')) { if (visible(t) && hit(t)) { btn = t; break; } }
-    if (btn) {
-        try { btn.click(); } catch (e) {}
-        XIA_AI.log('→ 下一题 "' + qtext(btn).slice(0, 12) + '"', 'ok');
-    } else if (Date.now() - (XIA_AI._navErrAt || 0) > 10000) {
-        XIA_AI._navErrAt = Date.now();
-        XIA_AI.log('未找到下一题按钮', 'error');
-    }
-    return !!btn;
-}
+
 
 // ===== 作业列表巡航：自动逐份完成列表中的作业 =====
 // 状态机：提交完成详情页(homeworkDetailPage) → 返回列表 → 打开下一份「做作业」→ 试卷页(homeworkPaperId)交给答题主流程。
@@ -56,138 +42,15 @@ function homeworkWalker() {
     return false;
 }
 
-// 找到可见且文本（去空白后）完全等于 text 的第一个元素
-function exactText(selector, text) {
-    let hit = null;
-    qsa(selector).forEach(el => { if (!hit && visible(el) && qtextAll(el) === text) hit = el; });
-    return hit;
-}
 
-// 图片作答题检测：题干/题块明确要求上传图片、拍照等（LLM 无法产出图片，需跳过交人工）。
-// 仅按文本特征判定，不检测上传控件——编辑器工具栏普遍自带图片按钮，按控件判定会全量误报。
-function isImageAnswerQuestion(root) {
-    if (!root) return false;
-    const box = (root.closest && root.closest('.question-box')) || root;
-    const text = qtext(box);
-    if (/上传[^。]{0,8}(图片|照片|截图|图像)|(图片|照片|截图|图像)[^。]{0,8}(作答|答题|回答|上传)|拍照上传|拍照作答|以图片形式|手写并?(拍照|上传)/.test(text)) return true;
-    let hit = false;
-    qsa('button, .el-button, a, span, div, [class*="tip"], [class*="hint"]', box).forEach(el => {
-        if (hit || !visible(el)) return;
-        if (/^(上传图片|上传照片|图片上传|拍照上传|点击上传|拍照作答)$/.test(qtextAll(el)) && el.offsetHeight < 80) hit = true;
-    });
-    return hit;
-}
 
-// ============ 题目容器定位与解析 ============
 
-function questionRoot() {
-    let roots = qsa(XIA_QROOT).filter(el => visible(el) && el.offsetHeight > 8);
-    if (!roots.length) { // 兜底：.question-tag-score 是各题型组件共有的作用域标记，取其容器作为题目块
-        const seen = [];
-        qsa('.question-tag-score').forEach(tag => {
-            const box = tag.closest('.question-box') || tag.parentElement;
-            if (!box || seen.indexOf(box) >= 0) return;
-            if (!box.querySelector('.topic-title, .subject-title, .el-radio, .el-checkbox, input')) return;
-            if (visible(box) && box.offsetHeight > 8) seen.push(box);
-        });
-        roots = seen;
-    }
-    if (!roots.length) return null;
-    for (const r of roots) if (!isAnswered(r)) return r; // 优先返回未作答的（列表页自动顺延到下一题）
-    return roots[0];
-}
-
-function questionType(root) {
-    if (!root) return 'single';
-    const cls = root.className || '';
-    if (cls.indexOf('homework-multiple-selected') >= 0) return 'multi';
-    if (cls.indexOf('homework-true-or-false') >= 0) return 'bool';
-    if (cls.indexOf('homework-question-editor') >= 0) return 'subjective';
-    if (cls.indexOf('homework-cloze') >= 0) return 'cloze';
-    if (cls.indexOf('homework-single-selected') >= 0) return 'single';
-    if (root.querySelector('.el-checkbox')) return 'multi';
-    return 'single';
-}
-
-function isAnswered(root) {
-    if (!root) return false;
-    const t = questionType(root);
-    if (t === 'subjective') {
-        const ed = root.querySelector('[contenteditable="true"]');
-        return !!(ed && qtextAll(ed).length > 0);
-    }
-    if (t === 'cloze') return qsa('input', root).some(i => (i.value || '').trim());
-    return !!root.querySelector('.is-checked');
-}
-
-// 选项字母：优先 .index-name；input.value 仅在单字母 A-H 时采用（防 TRUE/FALSE 提取出假字母 E/F）
-function letterOf(label) {
-    const m = label.querySelector('.index-name');
-    const nameLetter = m ? qtext(m).match(/[A-H]/) : null;
-    if (nameLetter) return nameLetter[0];
-    const input = label.querySelector('input[type="radio"], input[type="checkbox"]');
-    const v = input && input.value ? String(input.value).trim().toUpperCase() : '';
-    return /^[A-H]$/.test(v) ? v : null;
-}
-
-// 校验目标字母选项是否已真实选中（回填后确认用，防合成事件未生效）
-function allSelected(root, letters) {
-    if (!root) return false;
-    const labels = qsa('.el-radio, .el-checkbox', root);
-    return String(letters).toUpperCase().split('').every(ch => {
-        const hit = labels.find(l => letterOf(l) === ch);
-        if (!hit) return false;
-        const input = hit.querySelector('input[type="radio"], input[type="checkbox"]');
-        return hit.classList.contains('is-checked') || !!(input && input.checked);
-    });
-}
-
-// 从题目容器（或其所在 question-box）提取分值，如「主观 30分」→ 30；取不到返回 0
-function questionScore(root) {
-    const scope = root.querySelector('.question-tag-score') ? root : (root.closest('.question-box') || root.parentElement || root);
-    const m = scope.querySelector('.question-tag-score');
-    const s = m ? qtext(m).match(/(\d+)\s*分/) : null;
-    return s ? parseInt(s[1], 10) : 0;
-}
-
-// 主观题按分值定目标字数（30分大题写600字，5分小题写150字）
-function targetWords(score) {
-    if (!score || score <= 0) return 250;
-    if (score >= 20) return 600;
-    if (score >= 10) return 400;
-    if (score >= 5) return 250;
-    return 150;
-}
-
-function extractOptions(root) {
-    const opts = [];
-    qsa('.el-radio, .el-checkbox', root).forEach(label => {
-        if (!visible(label)) return;
-        const n = label.querySelector('.index-name');
-        const m = n ? qtext(n).match(/[A-H]/) : null;
-        let letter = m ? m[0] : String.fromCharCode(65 + opts.length);
-        const el = label.querySelector('.label, .el-radio__label, .el-checkbox__label');
-        const text = el ? qtext(el) : qtext(label).replace(/^[A-H][\.\．、\:：\s]*/, '');
-        if (opts.some(o => o.letter === letter)) letter = String.fromCharCode(65 + opts.length); // 字母重复则按顺序补
-        opts.push({ letter: letter, text: text.slice(0, 120), node: label });
-    });
-    return opts;
-}
-
-function questionTitle(root) {
-    const t = root.querySelector('.topic-title, .subject-title, [class*="topic-title"], [class*="subject-title"]');
-    return (t ? qtext(t) : qtext(root))
-        .replace(/^\s*\d+[\.\．、]*/, '')
-        .replace(/\s*单选|\s*多选|\s*判断|\s*填空|\s*主观题/g, '')
-        .replace(/\s*\d+\s*分\s*/g, '')
-        .slice(0, 400);
-}
 
 const XIA_AI = {
     lastQuestionHash: '',
     answering: false,
     answeringOnce: false,
-    stats: { answered: 0, cached: 0, submitted: 0, failed: 0 },
+    stats: { answered: 0, submitted: 0, failed: 0 },
     _lastNav: 0,
     _navErrAt: 0,
     _failHash: '',
@@ -203,7 +66,6 @@ const XIA_AI = {
     _cfgLogAt: 0,
     _nextAnswerAt: 0,   // 答题间隔：该时间戳之前不抓答新题
     _imgLogged: '',
-    _bank: null,
     logLines: [],
 
     log(msg, type) {
@@ -227,33 +89,22 @@ const XIA_AI = {
         if (el) el.textContent = text;
     },
 
-    // 会话统计（已答/缓存命中/已提交）刷新到面板
+    // 会话统计（已答/已提交）刷新到面板
     bump(k) {
         if (k) XIA_AI.stats[k]++;
         const el = document.getElementById('xa-stats');
         if (el) {
             const s = XIA_AI.stats;
-            el.textContent = '已答 ' + s.answered + ' · 缓存命中 ' + s.cached + ' · 已提交 ' + s.submitted;
+            el.textContent = '已答 ' + s.answered + ' · 已提交 ' + s.submitted;
         }
     },
 
-    // ===== 答案本：本地缓存 题目hash → 答案，重做/重进同一份试卷不再重复调用 AI =====
-    bankGet(key) {
-        if (!XIA_AI._bank) {
-            try { XIA_AI._bank = JSON.parse(GM_getValue(SK.bank, '{}')) || {}; } catch (e) { XIA_AI._bank = {}; }
-        }
-        const hit = XIA_AI._bank[key];
-        return hit ? hit.a : null;
-    },
-    bankSet(key, answer) {
-        XIA_AI.bankGet(key); // 确保已加载
-        XIA_AI._bank[key] = { a: answer, t: Date.now() };
-        const keys = Object.keys(XIA_AI._bank);
-        if (keys.length > CFG.BANK_MAX) { // 超上限：淘汰最早写入的
-            keys.sort((x, y) => XIA_AI._bank[x].t - XIA_AI._bank[y].t);
-            keys.slice(0, keys.length - CFG.BANK_MAX).forEach(k => { delete XIA_AI._bank[k]; });
-        }
-        try { GM_setValue(SK.bank, JSON.stringify(XIA_AI._bank)); } catch (e) {}
+    // 答题间隔结算：本题完成后按面板设置延迟下一题（0=不等待），并刷新面板进度。
+    // （原 scanAI/verifyAndAdvance 各写一份，收敛为一个出口防止间隔逻辑漂移）
+    _answerGap() {
+        const delay = Math.max(0, parseInt(conf.answerDelay, 10) || 0);
+        if (delay) XIA_AI._nextAnswerAt = Date.now() + delay * 1000;
+        XIA_AI.progress('✅ 已答 ' + XIA_AI.stats.answered + ' 题');
     },
 
     // ===== 图片作答题跳过记录（GM 持久化）：巡航重进同一份作业时直接跳过不再尝试 =====
@@ -291,19 +142,9 @@ const XIA_AI = {
         try {
             const root = QA.questionRoot();
             if (!root) return null;
-            const type = QA.questionType(root);
-            const title = QA.questionTitle(root);
-            if (!title || title.length < 3) return null;
-            const score = QA.questionScore(root);
-            if (type === 'subjective') return { question: title, options: [], node: root, type: type, score: score };
-            if (type === 'cloze') {
-                const blanks = qsa('input', root).filter(el => visible(el) && !/(radio|checkbox|hidden|file|button|submit)/i.test(el.type)).length;
-                if (!blanks) { XIA_AI.log('检测到填空题但未找到输入框', 'error'); return null; }
-                return { question: title, options: [], node: root, type: type, blanks: blanks, score: score };
-            }
-            const options = QA.extractOptions(root);
-            if (!options.length) { XIA_AI.log('抓到题目但无选项: ' + title.slice(0, 60), 'error'); return null; }
-            return { question: title, options: options, node: root, type: (type === 'bool' ? 'single' : type), score: score };
+            const q = parseQuestionRoot(root);
+            if (!q) { XIA_AI.log('抓到题目但解析失败（无标题/无选项/无输入框）', 'error'); return null; }
+            return q;
         } catch (e) {
             XIA_AI.log('grabQuestion异常: ' + (e && e.message ? e.message : e), 'error');
             return null;
@@ -321,6 +162,13 @@ const XIA_AI = {
 
     buildPrompt(question, options, type, ctx, score, blanks) {
         const opt = (options || []).map(o => o.letter + '. ' + o.text).join(' ');
+        // 判断题在 parseQuestionRoot 已转为 single（选项 T.对/F.错 → A/B），
+        // 但选项恰为「对/错」时按判断题出题，模型才稳定回字母而非中文。
+        // 选项文本带字母前缀（真机 "T.对"/"F.错"），先剥前缀再匹配
+        const stripOpt = t => String(t || '').replace(/^[A-Za-z][\.\．、:：]\s*/, '').trim();
+        const isBool = options && options.length === 2
+            && /^(对|正确|√)\s*$/.test(stripOpt(options[0].text))
+            && /^(错|不正确|错误|×)\s*$/.test(stripOpt(options[1].text));
         let base;
         if (type === 'subjective') {
             const words = targetWords(score);
@@ -334,9 +182,20 @@ const XIA_AI = {
             base = '你是答题助手。下面是一道填空题，共 ' + blanks + ' 空。请按顺序给出每空的答案：每空一行、只写答案本身，'
                 + '不要序号、不要解释、不要重复题干。\n\n题目：' + question;
         } else if (type === 'multi') {
-            base = '你是答题助手。请分析以下多选题，输出所有正确选项的字母，多个字母直接拼接（如 ABC），不要有任何废话。\n\n题目：' + question + '\n\n选项：' + opt;
+            base = '你是答题助手。下面是一道多选题，请逐项分析每个选项，选出所有正确的选项。\n'
+                + '- 只输出正确选项的字母组合，按字母顺序拼接（如 ABC），不要任何解释、不要换行\n'
+                + '- 只选有把握的选项：错选不得分，不确定的宁可不选\n'
+                + '- 注意否定式提问（如「不正确/不属于/错误的是」），选出不符合题意的那些选项\n\n'
+                + '题目：' + question + '\n\n选项：' + opt;
+        } else if (isBool) {
+            base = '你是答题助手。下面是一道判断题，请判断题干说法是否正确。\n'
+                + '只输出一个字母：说法正确输出 A，说法错误输出 B。不要解释、不要输出「对/错」等文字。\n\n'
+                + '题目：' + question;
         } else {
-            base = '你是答题助手。请分析以下题目和选项，直接输出正确选项的字母（如 A 或 B），只输出一个字母，不要有任何废话、不要解释、不要换行。\n\n题目：' + question + '\n\n选项：' + opt;
+            base = '你是答题助手。请分析以下题目和选项，选出正确选项，直接输出该选项的字母（如 A），只输出一个字母，不要解释、不要换行。\n'
+                + '- 注意否定式提问（如「不正确/不属于/与…无关的是」），选出不符合的一项\n'
+                + '- 若多个选项看似都对，选最准确、最符合题意的一个\n\n'
+                + '题目：' + question + '\n\n选项：' + opt;
         }
         if (ctx) {
             return '以下是检索到的相关资料（可能包含答案，请甄别并优先采信权威可靠来源；若资料与你的知识冲突，以资料为准）：\n' + ctx + '\n\n==========\n\n' + base;
@@ -386,7 +245,10 @@ const XIA_AI = {
     },
 
     // 解析 AI 回复：single 四级提取一个字母（防英文套话连带误取），multi 字母集合，cloze 按行切分，subjective 原文
-    parseAnswer(content, type) {
+    // validLetters：可选，本次题目的合法字母集（由调用方按实际选项数生成）。
+    //   - 解析出的字母越界（幻觉出的选项）→ 视为解析失败走 strict 重试，防回填空转
+    //   - 字母解析落空 → 按选项文本反查一次（模型常无视指令直接回选项内容）
+    parseAnswer(content, type, validLetters, options) {
         const c = String(content || '').trim();
         if (!c) return null;
         if (type === 'subjective') return c;
@@ -406,14 +268,41 @@ const XIA_AI = {
             return clean.length ? clean.join('|') : null;
         }
         if (type === 'multi') {
-            const letters = c.match(/[A-H]/g);
-            return letters ? letters.filter((ch, i, a) => a.indexOf(ch) === i).join('') : null;
+            // 分级提取：裸字母串 > 引导词后跟字母串 > 全文字母，统一排序去重。
+            // 全文抓 [A-H] 会被回复正文里的英文单词（Based/Both）与缩写（GDP）污染，
+            // 只有前两级落空时才兜底。分隔符类含「与/和」防「应选 A 与 C」截断丢字母
+            const pick = s => String(s).toUpperCase().replace(/[^A-H]/g, '').split('').filter((ch, i, a) => a.indexOf(ch) === i).sort().join('');
+            const bad = ls => validLetters && ls.split('').some(ch => validLetters.indexOf(ch) < 0); // 越界字母 → strict 重试
+            const bare = c.match(/^[^A-Za-z]*([A-H][A-H\s\.．、,，与和]+)[^A-Za-z]*$/);
+            if (bare && pick(bare[1]) && !bad(pick(bare[1]))) return pick(bare[1]);
+            const guided = c.match(/(?:正确答案|应选|选|答案)[:：是为]?\s*([A-H][A-H\s\.．、,，与和]{0,})/);
+            if (guided && pick(guided[1]) && !bad(pick(guided[1]))) return pick(guided[1]);
+            const letters = c.toUpperCase().match(/[A-H]/g);
+            const all = letters && letters.length ? letters.filter((ch, i, a) => a.indexOf(ch) === i).sort().join('') : '';
+            return all && !bad(all) ? all : null;
         }
         const m = c.match(/^\s*([A-H])\s*$/i)
             || c.match(/(?:正确答案|参考答案|答案|应选|选|答|answer|option|choice)\s*(?:is|[:：是为])?\s*([A-H])(?![A-Za-z])/i)
             || c.match(/^\s*([A-H])[\s\.\．、:：]/i)
             || c.match(/\b([A-H])\b/i);
-        return m ? m[1].toUpperCase() : null;
+        let letter = m ? m[1].toUpperCase() : null;
+        if (letter && validLetters && validLetters.indexOf(letter) < 0) return null; // 幻觉字母越界 → strict 重试
+        if (!letter && validLetters) {
+            // 字母提取落空：模型可能直接回了选项文本（「分位数」「正确」），按文本反查
+            return this.matchByText(c, validLetters, options) || null;
+        }
+        return letter;
+    },
+
+    // 选项文本反查：AI 回复中完整包含某选项文本（≥2字，防单字误命中）→ 返回最长命中的选项字母
+    matchByText(content, validLetters, options) {
+        const c = String(content || '');
+        let best = '';
+        for (const o of (options || [])) {
+            const t = String(o.text || '').trim();
+            if (t.length >= 2 && c.indexOf(t) >= 0 && t.length > best.length) best = o.letter;
+        }
+        return best && (!validLetters || validLetters.indexOf(best) >= 0) ? best : '';
     },
 
     // 调用 LLM。q 为 grabQuestion() 结果；onResult(answer|null)。
@@ -434,12 +323,20 @@ const XIA_AI = {
         const needSearch = conf.searchMode === 'always'
             || (conf.searchMode === 'auto' && !isSubjective && type !== 'cloze' && XIA_AI.needsSearch(q.question));
 
+        // 合法字母集（按实际选项数）：解析出越界字母视为失败，strict 重试而不是回填空转
+        const optCount = (q.options || []).length;
+        const validLetters = (type === 'single' || type === 'multi') && optCount > 0
+            ? Array.from({ length: Math.min(optCount, 8) }, (_, i) => String.fromCharCode(65 + i)).join('')
+            : '';
+
         const ask = (ctx, strict) => {
             let prompt = XIA_AI.buildPrompt(q.question, q.options, type, ctx, q.score, q.blanks);
             if (strict) {
                 prompt += type === 'cloze'
                     ? '\n\n（重要：上一轮回复格式不符合要求。请严格每空一行、每行只写一个答案，不要任何其他文字。）'
-                    : '\n\n（重要：上一轮回复格式不符合要求。只输出选项字母，不要输出任何其他文字。）';
+                    : '\n\n（重要：上一轮回复格式不符合要求。只输出选项字母，不要输出任何其他文字。'
+                        + (validLetters ? '本题只有 ' + validLetters.length + ' 个选项，只能从 ' + validLetters.split('').join('/') + ' 中选择。' : '')
+                        + '）';
             }
             XIA_AI.log('请求 ' + model + (ctx ? '（含检索资料）' : '') + (strict ? '（格式重试）' : ''), 'ai');
             try {
@@ -477,7 +374,7 @@ const XIA_AI = {
                             content = (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
                         } catch (e) { content = ''; }
                         if (!content) { XIA_AI.log('AI 响应无内容: ' + (res.responseText || '').slice(0, 200), 'error'); onResult(null); return; }
-                        const answer = XIA_AI.parseAnswer(content, type);
+                        const answer = XIA_AI.parseAnswer(content, type, validLetters, q.options);
                         if (!answer) {
                             if (!strict && !isSubjective) { ask(ctx, true); return; } // 强调格式重试一次
                             XIA_AI.log('AI 返回无法解析: "' + content.trim().slice(0, 80) + '"', 'error');
@@ -645,12 +542,9 @@ const XIA_AI = {
             if (ok) {
                 XIA_AI._failHash = '';
                 XIA_AI._failCount = 0;
-                XIA_AI.bankSet(hash, answer); // 成功回填 → 存入答案本
                 XIA_AI.lastQuestionHash = '';
                 XIA_AI.bump('answered');
-                const delay = Math.max(0, parseInt(conf.answerDelay, 10) || 0);
-                if (delay) XIA_AI._nextAnswerAt = Date.now() + delay * 1000;
-                XIA_AI.progress('✅ 已答 ' + XIA_AI.stats.answered + ' 题');
+                XIA_AI._answerGap();
                 XIA_AI.log('回填已生效，跳转下一题', 'ok');
                 clickNextQuestionButton();
                 XIA_AI.answering = false;
@@ -760,6 +654,9 @@ const XIA_AI = {
 
     scan() {
         if (!conf.autoAnswer || XIA_AI.answering) return;
+        // 路由短路：视频/课程/首页等无题目路由直接返回，挂机刷课时不再每 3s 全量扫 DOM。
+        // 卷面页（homeworkPaperId）/作业列表/考试页均含 homework|exam 字样，放行
+        if (!routeHasQuestions(location.hash)) return;
         if (XIA_AI._cfgError) { // 配置熔断：暂停扫描，面板改正任一 AI 配置项后自动恢复
             const now = Date.now();
             if (now - XIA_AI._cfgLogAt > 30000) {
@@ -781,8 +678,7 @@ const XIA_AI = {
         if (!q || !q.question) return;
         if (q.type !== 'subjective' && q.type !== 'cloze' && q.options.length === 0) return;
 
-        const hash = q.question.slice(0, 100) + '|'
-            + (q.options.length ? q.options.map(o => o.letter + o.text.slice(0, 30)).join(',') : (q.type === 'cloze' ? 'cloze' : 'subj'));
+        const hash = questionHash(q);
         if (hash === XIA_AI.lastQuestionHash) return;
 
         // 已作答：跳到下一题（questionRoot 优先返回未答题，此处多为最后一题或翻页失败）
@@ -809,21 +705,16 @@ const XIA_AI = {
             return;
         }
 
+        XIA_AI.scanAI(q, hash);
+    },
+
+    // 答题主流程：检索 → LLM（原 scan 主体后段）
+    scanAI(q, hash) {
         XIA_AI.answering = true;
         XIA_AI.progress('📋 ' + q.question.slice(0, 24));
         XIA_AI.log('📋 抓到题目: ' + q.question.slice(0, 60) + (q.question.length > 60 ? '…' : '')
             + ' [' + q.type + (q.score ? ' ' + q.score + '分' : '') + ']');
         if (q.options.length) XIA_AI.log('选项 ' + q.options.length + ' 个: ' + q.options.map(o => o.letter).join(' '));
-
-        // 答案本命中：客观题直接回填，不再调用 AI / 检索
-        const cached = (q.type !== 'subjective' && q.type !== 'cloze') ? XIA_AI.bankGet(hash) : null;
-        if (cached) {
-            XIA_AI.log('💾 命中答案本，直接回填: ' + cached, 'ok');
-            XIA_AI.bump('cached');
-            XIA_AI.lastQuestionHash = hash;
-            XIA_AI.fillChoice(cached, q.node, () => XIA_AI.verifyAndAdvance(q, hash, cached));
-            return;
-        }
 
         XIA_AI.callAI(q, ans => {
             if (!ans) {
@@ -837,11 +728,8 @@ const XIA_AI = {
             if (q.type === 'subjective') {
                 XIA_AI.answerSubjective(ans, ok => {
                     if (ok) {
-                        XIA_AI.bankSet(hash, ans);
                         XIA_AI.bump('answered');
-                        const delay = Math.max(0, parseInt(conf.answerDelay, 10) || 0);
-                        if (delay) XIA_AI._nextAnswerAt = Date.now() + delay * 1000;
-                        XIA_AI.progress('✅ 已答 ' + XIA_AI.stats.answered + ' 题');
+                        XIA_AI._answerGap();
                         XIA_AI.log('主观题答案已填入，2s 后跳转下一题', 'ok');
                         setTimeout(() => { clickNextQuestionButton(); XIA_AI.answering = false; }, 2000);
                     } else {
@@ -857,6 +745,8 @@ const XIA_AI = {
             }
         });
     },
+
+
 
     testGrab() {
         const q = XIA_AI.grabQuestion();

@@ -21,14 +21,14 @@ function qtextAll(el) { return ((el && el.textContent) || '').replace(/\s+/g, ''
 // ② 劫持 HTMLMediaElement.play()：任何播放调用先静音（堵住轮询间隙）
 // ③ 捕获 volumechange：页面/播放器任何取消静音的操作即时压回（该事件不冒泡，必须用捕获）
 function installMute() {
-    const muteEl = el => { if (muteEnabled && !el.muted) el.muted = true; };
     try {
-        new MutationObserver(muts => {
-            for (const m of muts) for (const n of m.addedNodes) {
-                if (n.nodeType !== 1) continue;
-                if (n instanceof HTMLMediaElement) muteEl(n);
-                if (n.querySelectorAll) qsa('video, audio', n).forEach(muteEl);
-            }
+        // 批次合并：SPA 导航/大列表渲染会产生成百上千个 addedNode，逐节点 QSA 是纯浪费。
+        // 合并到 300ms 一次全页静音（play() 劫持兜底保证新元素在窗口期内也不会出声）
+        let pending = false;
+        new MutationObserver(() => {
+            if (pending) return;
+            pending = true;
+            setTimeout(() => { pending = false; muteAll(); }, 300);
         }).observe(document.documentElement, { childList: true, subtree: true });
     } catch (e) {}
     try {
@@ -51,17 +51,41 @@ function muteAll() {
     document.querySelectorAll('video, audio').forEach(v => { if (muteEnabled && !v.muted) v.muted = true; });
 }
 
+// 视频内弹题/交互浮层检测：marker 弹题（到达标记点暂停 + 浮层答题）与答题弹窗出现时，
+// 页面的暂停是刻意行为——此时催促播放会与平台机制互踩（弹题被顶回去/状态错乱），
+// 需避让：video 暂停但存在可见交互浮层时，keepPlay 与卡死看门狗都不碰播放。
+// 性能：单次逗号选择器（原来 8 次独立 QSA，keepPlay 每 tick 都调）
+const XA_OVERLAY_SEL = '.el-message-box, .el-dialog, .vjs-modal-dialog, [class*="question-popup"], [class*="quiz"], [class*="answer-popup"], [class*="marker"], .el-overlay';
+let _ovCacheAt = 0, _ovCacheVal = false; // 同 tick 复用（keepPlay + videoStallCheck 一个 tick 内各调一次）
+function interactiveOverlay() {
+    const now = Date.now();
+    if (now - _ovCacheAt < 1200) return _ovCacheVal;
+    _ovCacheAt = now;
+    _ovCacheVal = false;
+    for (const el of qsa(XA_OVERLAY_SEL)) {
+        if (!visible(el)) continue;
+        if (qtextAll(el).length > 4) { _ovCacheVal = true; break; } // 有实际内容的浮层（空容器不算）
+    }
+    return _ovCacheVal;
+}
+
 // 反挂机检测规避：伪造可见/聚焦状态 + 合成随机用户行为
+let _poseInstalled = false; // 属性劫持只装一次（每 tick 重复 defineProperty 无意义且耗性能）
 function keepPlay() {
+    const overlay = interactiveOverlay(); // 弹题/答题浮层期间不催播（避让平台刻意的暂停）
     document.querySelectorAll('video, audio').forEach(v => {
+        if (overlay) return;
         if (v.paused && !v.ended && v.readyState >= 2) {
             try { v.play().catch(() => {}); } catch (e) {}
         }
     });
 
-    try { Object.defineProperty(document, 'hidden', { get: () => false }); } catch (e) {}
-    try { Object.defineProperty(document, 'visibilityState', { get: () => 'visible' }); } catch (e) {}
-    try { document.hasFocus = function () { return true; }; } catch (e) {}
+    if (!_poseInstalled) {
+        _poseInstalled = true;
+        try { Object.defineProperty(document, 'hidden', { get: () => false }); } catch (e) {}
+        try { Object.defineProperty(document, 'visibilityState', { get: () => 'visible' }); } catch (e) {}
+        try { document.hasFocus = function () { return true; }; } catch (e) {}
+    }
 
     const randInt = (a, b) => Math.floor(Math.random() * (b - a) + a);
     const x = randInt(50, window.innerWidth - 50 || 200);
@@ -75,7 +99,7 @@ function keepPlay() {
         }));
     } catch (e) {}
 
-    if (Math.random() > 0.75) {
+    if (!overlay && Math.random() > 0.75) { // 浮层期间不合成点击（防误点弹题/弹窗按钮）
         try {
             const t = document.elementFromPoint(x, y) || document.body;
             t.dispatchEvent(new MouseEvent('click', {
@@ -114,7 +138,8 @@ function ensureVisible(el) {
 }
 
 // 在课程侧边栏中，从当前高亮节点往后找下一个可点击的章节节点
-function findNextMenuItem(activeNode) {
+// filter（可选）：额外过滤器（节点 Element → bool），用于跳过已完成章节等
+function findNextMenuItem(activeNode, filter) {
     let cur = activeNode;
     const LIMIT = 80;
     for (let i = 0; i < LIMIT; i++) {
@@ -137,13 +162,33 @@ function findNextMenuItem(activeNode) {
                 if (txt.length === 0) continue;
                 const hasTime = /[\d:：]/.test(txt) || it.querySelector('.time, .duration, [class*="time"]');
                 if (!hasTime) continue;
+                if (filter && !filter(it)) continue;
                 if (it.offsetHeight > 0 && it.offsetWidth > 0) { target = it; break; }
             }
             if (target) return target;
         } else if (sib.matches && sib.matches('li.el-menu-item')) {
-            return sib;
+            if (!filter || filter(sib)) return sib;
         }
         cur = sib;
     }
     return null;
+}
+
+// 侧边栏章节完成状态（courseMenu chunk 实证：.lecture-status 仅在 assessPoints===1 时渲染）
+// inProgress-icon=进行中（半圆） / unStart-icon=未开始（空心圆） / done-icon=已完成（对勾）
+// 无图标的节（PPT/文档等非考核内容）平台永远不给完成态，必须排除出补完扫描——
+// 否则视频刷完后扫描会反复命中这些节点，造成来回跳转 PPT 页的死循环
+function menuItemIncomplete(li) {
+    if (!li) return false;
+    // 锁定章（.disable-menu，开放时间窗之外）内的节点击不跳转（平台静默拦截），
+    // 扫描命中只会白耗轮次——排除（ElMenuComponent chunk + 真机实测 2026-10-09）
+    if (li.closest && li.closest('.el-sub-menu.disable-menu')) return false;
+    return !!li.querySelector('.inProgress-icon, .unStart-icon');
+}
+
+// 找到可见且文本（去空白后）完全等于 text 的第一个元素
+function exactText(selector, text) {
+    let hit = null;
+    qsa(selector).forEach(el => { if (!hit && visible(el) && qtextAll(el) === text) hit = el; });
+    return hit;
 }

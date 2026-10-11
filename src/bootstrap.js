@@ -29,4 +29,4 @@ XIA_AI.log('本脚本以 MIT 协议开源发布，详见仓库 LICENSE。请遵�
 // 启动「学习状态异常」弹窗自动刷新
 initPopupAutoReload();
 
-console.log('[XinweiAutoStudy] 已加载');
+console.log('[XinweiAutoStudy] 已加载 v__XA_VERSION__');
