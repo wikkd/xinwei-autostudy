@@ -1,0 +1,36 @@
+# CI：构建 + 全量测试 + 版本一致性（push/PR 到 main 时触发）
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install devDependencies (terser/jsdom)
+        run: npm ci --no-audit --no-fund
+
+      - name: Version consistency (meta.js is the single source)
+        run: node scripts/sync-version.js
+
+      - name: Build (with terser minification)
+        run: node build.js
+
+      - name: Syntax check dist
+        run: node --check dist/xinwei-autostudy.user.js
+
+      - name: Tests (src suites + dist smoke + jsdom startup)
+        run: node tests/run-all.js
