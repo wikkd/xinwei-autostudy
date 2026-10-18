@@ -46,10 +46,12 @@ window.eval(FILES.map(f => fs.readFileSync(path.join(SRC, f), 'utf8')).join('\n'
     get conf() { return conf; },
     ai: XIA_AI,
     markerTick: markerQuestionTick,
+    imageQ: isImageAnswerQuestion,
     resetMarker: () => { _mqKey = ''; _mqState = ''; _mqFails = {}; },
 };`);
 window.loadCfg(); // 必须在解构前：loadCfg 会整体重赋值 conf，之后 getter 才返回最终对象
 const { conf, ai: XIA_AI, markerTick, resetMarker } = window.__T;
+const imageQ = window.__T.imageQ;
 
 let pass = 0, fail = 0;
 const eq = (label, got, want) => {
@@ -78,6 +80,7 @@ function resetAI(confirmMode) {
         lastQuestionHash: '', answering: false, answeringOnce: false,
         _failHash: '', _failCount: 0, _skipHash: '', _skipCount: 0,
         _submitting: false, _lastSubmitTry: 0, _donePage: '', _nextAnswerAt: 0, _cfgError: null,
+        _lastNav: 0, _imgLogged: '',
     });
     XIA_AI.stats = { answered: 0, submitted: 0, failed: 0 };
     resetMarker(); // 弹题状态机（popup.js 模块级 let，须经闭包复位）
@@ -248,6 +251,107 @@ function markerFixture(multi) {
     eq('弹题多选：C 已选', fx.inputs[2].checked, true);
     eq('弹题多选：B 未误选', fx.inputs[1].checked, false);
     eq('弹题多选：代点提交', submitClicked, 1);
+}
+
+// ===== ⑧ 图片作答题判定（v3.14.1 回归）：编辑器工具栏不得把主观题误判成图片题 =====
+// 线上主观题使用富文本编辑器，工具栏自带「上传图片」按钮；旧实现扫题块全文/控件，
+// 导致所有主观题命中图片题分支（不调 AI、直接跳过）。
+function subjectiveFixture(opts) {
+    const o = opts || {};
+    window.document.body.innerHTML = `
+<div class="question-box">
+  <div class="question-area">
+    <div class="homework-question-editor">
+      <div class="question-tag-score">主观 10 分</div>
+      <div class="topic-title">1. ${o.stem || '简述新文化运动的历史意义。'}</div>
+      ${o.editor ? `
+      <div class="w-e-text-container">
+        ${o.toolbar ? '<div class="w-e-toolbar"><button title="上传图片">上传图片</button></div>' : ''}
+        <div class="w-e-text" contenteditable="true"></div>
+      </div>` : ''}
+      ${o.upload ? '<div class="answer-upload"><button class="el-button">上传图片</button></div>' : ''}
+      ${o.file ? '<input type="file">' : ''}
+    </div>
+  </div>
+</div>
+<button class="toggle-button">下一题</button>
+<div id="xa-progress"></div><div id="xa-stats"></div><div id="xa-ai-log"></div>`;
+    if (o.upload) {
+        // 测试桩把所有元素 offsetHeight 设为 100；真实上传按钮是小控件（<80），控件判定依赖这一点
+        const btn = window.document.querySelector('.answer-upload button');
+        Object.defineProperty(btn, 'offsetHeight', { get: () => 30, configurable: true });
+    }
+    return window.document.querySelector('.homework-question-editor');
+}
+
+{
+    resetAI(false);
+    // ① 普通主观题 + 富文本工具栏（含「上传图片」）→ 不是图片题
+    let root = subjectiveFixture({ editor: true, toolbar: true });
+    eq('图片判定：编辑器工具栏「上传图片」不误判', imageQ(root), false);
+
+    // ② 题干明确要求上传图片 → 图片题
+    root = subjectiveFixture({ editor: true, toolbar: true, stem: '请上传手写图片作为本题答案。' });
+    eq('图片判定：题干要求上传图片 → 跳过', imageQ(root), true);
+
+    // ③ 无文本编辑器、只有上传控件 → 图片题（含隐藏 file input 的纯上传题）
+    root = subjectiveFixture({ upload: true });
+    eq('图片判定：无编辑器只有上传按钮 → 图片题', imageQ(root), true);
+    root = subjectiveFixture({ file: true });
+    eq('图片判定：无编辑器只有 file input → 图片题', imageQ(root), true);
+
+    // ④ 无编辑器也无上传控件 → 不是图片题（交给后续失败提示，不能静默跳过）
+    root = subjectiveFixture({});
+    eq('图片判定：无编辑器无上传控件不误判', imageQ(root), false);
+
+    // ⑤ 有文本编辑器时，题块内的上传入口只是可选作答方式 → 不误判
+    root = subjectiveFixture({ editor: true, upload: true });
+    eq('图片判定：编辑器旁的上传入口不误判', imageQ(root), false);
+
+    // ⑤ 选择题选项里出现「上传照片」字样不影响判定（只看题干）
+    window.document.body.innerHTML = `
+<div class="homework-single-selected">
+  <div class="question-tag-score">单选 10 分</div>
+  <div class="topic-title">1. 下列哪项是正确的？</div>
+  <label class="el-radio"><span class="index-name">A.</span><span class="label"><span class="index-name">A.</span><span class="option-content">上传照片的操作步骤</span></span><input type="radio" value="A"></label>
+  <label class="el-radio"><span class="index-name">B.</span><span class="label"><span class="index-name">B.</span><span class="option-content">图片下载</span></span><input type="radio" value="B"></label>
+</div>
+<div id="xa-progress"></div><div id="xa-stats"></div><div id="xa-ai-log"></div>`;
+    eq('图片判定：选项文本不参与判定', imageQ(window.document.querySelector('.homework-single-selected')), false);
+}
+
+{
+    // ⑥ scan 集成：普通主观题必须进入 AI 作答（旧版在这里直接跳过）
+    resetAI(false);
+    subjectiveFixture({ editor: true, toolbar: true });
+    let asked = 0;
+    XIA_AI.callAI = () => { asked++; };
+    XIA_AI.scan();
+    eq('图片回归：普通主观题进入 AI 作答', asked, 1);
+
+    // ⑦ scan 集成：题干要求上传图片 → 不调 AI，记录跳过
+    resetAI(false);
+    delete store['xa_img_skipped'];
+    subjectiveFixture({ editor: true, toolbar: true, stem: '请上传手写图片作为本题答案。' });
+    let called = 0, nextClicked = 0;
+    XIA_AI.callAI = () => { called++; };
+    window.document.querySelector('.toggle-button').addEventListener('click', () => nextClicked++);
+    XIA_AI.scan();
+    eq('图片回归：真题不调用 AI', called, 0);
+    eq('图片回归：真题提示人工并跳过', window.document.getElementById('xa-progress').textContent.indexOf('🖼️'), 0);
+    eq('图片回归：真题尝试跳下一题', nextClicked, 1);
+}
+
+{
+    // ⑧ 旧版误判记录作废：修复前所有主观题 hash 都被写进跳过表，不能继续拦截
+    delete store['xa_img_skipped'];
+    window.GM_setValue('xa_img_skipped', JSON.stringify([{ h: 'old-hash', q: '旧误判', t: 1 }]));
+    eq('图片记录：旧版记录不再命中', XIA_AI.imgSkippedHas('old-hash'), false);
+    XIA_AI.imgSkipRemember('old-hash', '旧误判');
+    eq('图片记录：新版记录可命中', XIA_AI.imgSkippedHas('old-hash'), true);
+    const saved = JSON.parse(window.GM_getValue('xa_img_skipped', '[]'));
+    eq('图片记录：带判定器版本', saved.length > 0 && saved.every(x => x.v === 2), true);
+    eq('图片记录：旧记录被清理', saved.some(x => !x.v), false);
 }
 
 console.log(fail ? ('\n' + fail + ' FAILED / ' + (pass + fail)) : ('✅ ' + pass + '/' + (pass + fail) + ' qa state-machine tests passed'));

@@ -82,16 +82,38 @@ function xaApiMirrorTopic(t) {
     return { q: { question: question, options: options, type: type }, answer: answer };
 }
 
-// 图片作答题检测：题干/题块明确要求上传图片、拍照等（LLM 无法产出图片，需跳过交人工）。
-// 仅按文本特征判定，不检测上传控件——编辑器工具栏普遍自带图片按钮，按控件判定会全量误报。
+// 图片作答题检测：题干明确要求「上传/拍摄图片」时才判 true（LLM 无法产出图片，需跳过交人工）。
+// v3.14.1 修正：旧实现扫整个题块文本与控件，主观题富文本编辑器工具栏自带的「上传图片」按钮
+// 被当成作答要求 → 所有主观题被误判成图片题。编辑器支持插图只是作答方式，不是题目要求。
+// 现在只认两种证据：
+//   ① 题干写明要图片作答（只读标题；无标题元素时读剔除编辑器后的题块文本）；
+//   ② 主观题没有可输入的文本编辑器、只有图片上传控件 → 该题只能交图片。
+const IMG_REQUIRE_RE = /上传[^。]{0,8}(图片|照片|截图|图像)|(图片|照片|截图|图像)[^。]{0,8}(作答|答题|回答|上传)|拍照上传|拍照作答|以图片形式|手写并?(拍照|上传)/;
+
+// 题干文本：有标题元素就只读标题（选项、编辑器工具栏等一律不参与判定）；
+// 没有标题元素时才复制题块并移除编辑器子树（工具栏/占位文案/输入区）后取全文。
+function imageRequirementText(root, box) {
+    const title = root.querySelector('.topic-title, .subject-title, [class*="topic-title"], [class*="subject-title"]');
+    if (title) return qtext(title);
+    const clone = box.cloneNode(true);
+    qsa('[contenteditable], textarea, input, [class*="toolbar"], [class*="w-e-"], [class*="ql-"], [class*="tox-"], [class*="placeholder"], [data-slate-editor]', clone)
+        .forEach(n => { try { if (n.parentNode) n.parentNode.removeChild(n); } catch (e) {} });
+    return qtext(clone);
+}
+
 function isImageAnswerQuestion(root) {
     if (!root) return false;
     const box = (root.closest && root.closest('.question-box')) || root;
-    const text = qtext(box);
-    if (/上传[^。]{0,8}(图片|照片|截图|图像)|(图片|照片|截图|图像)[^。]{0,8}(作答|答题|回答|上传)|拍照上传|拍照作答|以图片形式|手写并?(拍照|上传)/.test(text)) return true;
+    if (IMG_REQUIRE_RE.test(imageRequirementText(root, box))) return true;
+    if (questionType(root) !== 'subjective') return false;
+    // 有文本编辑器时，上传/插图只是可选作答方式，AI 照常作答（这正是旧版全量误判的根源）
+    if (root.querySelector('[contenteditable="true"], [contenteditable=""], textarea, [data-slate-editor], [class*="w-e-text"], [class*="ql-editor"], [class*="tox-tinymce"]')) return false;
+    // 纯图片题：没有任何文本输入位，只看上传控件
     let hit = false;
-    qsa('button, .el-button, a, span, div, [class*="tip"], [class*="hint"]', box).forEach(el => {
-        if (hit || !visible(el)) return;
+    qsa('button, .el-button, a, span, div, input[type="file"]', box).forEach(el => {
+        if (hit) return;
+        if (el.tagName === 'INPUT') { hit = true; return; }
+        if (!visible(el)) return;
         if (/^(上传图片|上传照片|图片上传|拍照上传|点击上传|拍照作答)$/.test(qtextAll(el)) && el.offsetHeight < 80) hit = true;
     });
     return hit;
