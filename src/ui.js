@@ -156,10 +156,11 @@ function buildPanel() {
         <option value="always">检索：总是</option>
       </select>
       <select class="xa-input" id="xa-search-provider">
-        <option value="duckduckgo">来源：DuckDuckGo（免密钥）</option>
+        <option value="bing">来源：Bing（国内直连）</option>
+        <option value="duckduckgo">来源：DuckDuckGo（需代理）</option>
         <option value="tavily">来源：Tavily（需 Key，更准）</option>
       </select>
-      <input class="xa-input" id="xa-search-key" type="password" placeholder="Tavily API Key（DDG 可留空）" />
+      <input class="xa-input" id="xa-search-key" type="password" placeholder="Tavily API Key（Bing/DDG 可留空）" />
     </div>
     <div class="xa-btnrow">
       <button class="xa-btn xa-once" id="xa-answer-once" title="只答当前这一题">🎯 答题</button>

@@ -19,7 +19,7 @@ const CFG = {
 
     DEFAULT_API_BASE: 'https://api.deepseek.com',
     DEFAULT_MODEL: 'deepseek-chat',
-    DEFAULT_SEARCH_PROVIDER: 'duckduckgo', // duckduckgo(免密钥) / tavily(需Key)
+    DEFAULT_SEARCH_PROVIDER: 'bing', // bing(国内直连) / duckduckgo(可能被墙) / tavily(需Key)
     DEFAULT_SEARCH_MODE: 'off',            // off / auto / always；默认 off：检索会向外部引擎发送题目内容，风险项用户显式开启
     SEARCH_MAX_CHARS: 3000,
 };

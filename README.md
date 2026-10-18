@@ -98,7 +98,7 @@ legacy/         原始脚本与补丁（仅作参考，不再维护）
 | API Base URL | 兼容 OpenAI `/v1/chat/completions` 的端点 | `https://api.deepseek.com` |
 | 模型名称 | 如 `deepseek-chat` / `deepseek-flash` / `gpt-4o-mini` | `deepseek-chat` |
 | 检索模式 | `off` / `auto` / `always`（风险项，题目内容会发往外部引擎） | `off` |
-| 检索源 | `duckduckgo`（免密钥）/ `tavily`（需 Key） | `duckduckgo` |
+| 检索源 | `bing`（国内直连）/ `duckduckgo`（需代理）/ `tavily`（需 Key） | `bing` |
 | Tavily Key | 仅 Tavily 模式需要 | 空 |
 | 答题间隔 | 每题答完后等待秒数再答下一题，0 = 不等待 | 0 |
 | 答完自动提交 | 高风险项，影响真实成绩 | 关 |

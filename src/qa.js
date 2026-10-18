@@ -46,6 +46,9 @@ function homeworkWalker() {
 
 
 
+// 图片题判定器版本（imgSkipped 记录格式）；升级判定逻辑时递增以作废旧记录
+const IMG_SKIP_VER = 2;
+
 const XIA_AI = {
     lastQuestionHash: '',
     answering: false,
@@ -108,16 +111,20 @@ const XIA_AI = {
     },
 
     // ===== 图片作答题跳过记录（GM 持久化）：巡航重进同一份作业时直接跳过不再尝试 =====
+    // 记录带判定器版本：v3.14.1 之前会把所有主观题误判成图片题并写入本表，
+    // 旧记录（无 v 或 v!==2）一律作废，否则修好检测后仍会被历史记录继续跳过。
     imgSkippedHas(hash) {
         let arr = [];
         try { arr = JSON.parse(GM_getValue(SK.imgSkipped, '[]')) || []; } catch (e) {}
-        return arr.some(x => x && x.h === hash);
+        return arr.some(x => x && x.h === hash && x.v === IMG_SKIP_VER);
     },
     imgSkipRemember(hash, title) {
         let arr = [];
         try { arr = JSON.parse(GM_getValue(SK.imgSkipped, '[]')) || []; } catch (e) {}
-        if (arr.some(x => x && x.h === hash)) return;
-        arr.push({ h: hash, q: String(title || '').slice(0, 80), t: Date.now() });
+        arr = arr.filter(x => x && x.v === IMG_SKIP_VER); // 顺手清掉旧版误判记录
+        if (!arr.some(x => x.h === hash)) {
+            arr.push({ h: hash, q: String(title || '').slice(0, 80), t: Date.now(), v: IMG_SKIP_VER });
+        }
         if (arr.length > 100) arr = arr.slice(-100);
         try { GM_setValue(SK.imgSkipped, JSON.stringify(arr)); } catch (e) {}
     },
@@ -206,7 +213,7 @@ const XIA_AI = {
     searchWeb(query, cb) {
         const maxChars = CFG.SEARCH_MAX_CHARS;
         const done = ctx => { try { cb(ctx || ''); } catch (e) {} };
-        if ((conf.searchProvider || 'duckduckgo') === 'tavily') {
+        if ((conf.searchProvider || 'bing') === 'tavily') {
             if (!conf.searchApiKey) { XIA_AI.log('Tavily 需要 API Key，回退为不检索', 'error'); return done(''); }
             GM_xmlhttpRequest({
                 method: 'POST', url: 'https://api.tavily.com/search', timeout: 15000,
@@ -221,7 +228,7 @@ const XIA_AI = {
                 onerror: () => { XIA_AI.log('检索网络错误', 'error'); done(''); },
                 ontimeout: () => { XIA_AI.log('检索超时', 'error'); done(''); },
             });
-        } else {
+        } else if ((conf.searchProvider || 'bing') === 'duckduckgo') {
             GM_xmlhttpRequest({
                 method: 'GET', timeout: 8000,
                 url: 'https://html.duckduckgo.com/html/?q=' + encodeURIComponent(query),
@@ -235,13 +242,45 @@ const XIA_AI = {
                             const t = m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
                             if (t) out.push(t);
                         }
-                        done(out.join('\n').slice(0, maxChars));
+                        if (out.length) return done(out.join('\n').slice(0, maxChars));
+                        XIA_AI.log('DDG 结果为空，改用 Bing 重试', 'warn');
+                        searchBing(query, done);
                     } catch (e) { XIA_AI.log('检索解析失败: ' + e.message, 'error'); done(''); }
                 },
-                onerror: () => { XIA_AI.log('检索网络错误（DDG 可能被墙/需代理）', 'error'); done(''); },
-                ontimeout: () => { XIA_AI.log('检索超时（8s），已跳过检索直接作答', 'error'); done(''); },
+                onerror: () => { XIA_AI.log('检索网络错误（DDG 可能被墙），改用 Bing 重试', 'warn'); searchBing(query, done); },
+                ontimeout: () => { XIA_AI.log('检索超时（8s），改用 Bing 重试', 'warn'); searchBing(query, done); },
             });
+        } else {
+            searchBing(query, done);
         }
+    },
+
+    // Bing 国内直连检索：cn.bing.com 的 b_algo 结果块整块剥标签提取（标题+摘要兼顾）
+    searchBing(query, cb) {
+        const maxChars = CFG.SEARCH_MAX_CHARS;
+        const done = ctx => { try { cb(ctx || ''); } catch (e) {} };
+        GM_xmlhttpRequest({
+            method: 'GET', timeout: 8000,
+            url: 'https://cn.bing.com/search?q=' + encodeURIComponent(query) + '&mkt=zh-CN',
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+            onload: r => {
+                try {
+                    const out = [];
+                    (r.responseText || '').split('class="b_algo"').slice(1).forEach(b => {
+                        const t = b.replace(/^[^<]+/, '') // 去掉 li 开始标签残留属性（data-id 等）
+                            .replace(/<script[\s\S]*?<\/script>/gi, '')
+                            .replace(/<[^>]+>/g, ' ') // 先剥标签后截断，防切在标签中间留残骸
+                            .replace(/\s+/g, ' ').trim().slice(0, 400);
+                        if (t.length >= 10) out.push(t);
+                    });
+                    if (out.length) return done(out.join('\n').slice(0, maxChars));
+                    XIA_AI.log('检索解析失败（Bing 返回无结果块），已跳过检索直接作答', 'error');
+                    done('');
+                } catch (e) { XIA_AI.log('检索解析失败: ' + e.message, 'error'); done(''); }
+            },
+            onerror: () => { XIA_AI.log('检索网络错误（Bing），已跳过检索直接作答', 'error'); done(''); },
+            ontimeout: () => { XIA_AI.log('检索超时（8s），已跳过检索直接作答', 'error'); done(''); },
+        });
     },
 
     // 解析 AI 回复：single 四级提取一个字母（防英文套话连带误取），multi 字母集合，cloze 按行切分，subjective 原文
