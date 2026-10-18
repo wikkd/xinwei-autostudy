@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         芯位网课辅助 (Xinwei AutoStudy)
 // @namespace    https://github.com/wikkd/xinwei-autostudy
-// @version      3.15.0
+// @version      3.15.1
 // @description  芯位（beeline-ai.com）网课学习辅助用户脚本：自动刷课 + AI 答题（单选/多选/判断/填空/主观，检索增强 + 本地答案本）。MIT 开源。
 // @author       wikkd
 // @homepage     https://github.com/wikkd/xinwei-autostudy
@@ -64,9 +64,9 @@ return!e||e<=0?250:e>=20?600:e>=10?400:e>=5?250:150}(r);c="你是考试答题助
 url:"https://api.tavily.com/search",timeout:15e3,headers:{"Content-Type":"application/json"},data:JSON.stringify({api_key:s.searchApiKey,query:e,max_results:5,search_depth:"basic"}),onload:e=>{try{const t=JSON.parse(e.responseText)
 ;n((t.results||[]).map(e=>(e.title?"【"+e.title+"】":"")+(e.content||"")).join("\n").slice(0,3e3))}catch(e){L.log("检索解析失败: "+e.message,"error"),n("")}},onerror:()=>{L.log("检索网络错误","error"),n("")},ontimeout:()=>{L.log("检索超时","error"),n("")}})
 }else"duckduckgo"===(s.searchProvider||"bing")?GM_xmlhttpRequest({method:"GET",timeout:8e3,url:"https://html.duckduckgo.com/html/?q="+encodeURIComponent(e),headers:{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},onload:t=>{try{
-const o=[],r=/class="result__(?:snippet|a)"[^>]*>([\s\S]*?)<\/a>/g;let i;for(;null!==(i=r.exec(t.responseText||""));){const e=i[1].replace(/<[^>]+>/g,"").replace(/\s+/g," ").trim();e&&o.push(e)}if(o.length)return n(o.join("\n").slice(0,3e3));L.log("DDG 结果为空，改用 Bing 重试","warn"),searchBing(e,n)
-}catch(e){L.log("检索解析失败: "+e.message,"error"),n("")}},onerror:()=>{L.log("检索网络错误（DDG 可能被墙），改用 Bing 重试","warn"),searchBing(e,n)},ontimeout:()=>{L.log("检索超时（8s），改用 Bing 重试","warn"),searchBing(e,n)}}):searchBing(e,n)},searchBing(e,t){const n=e=>{try{t(e||"")}catch(e){}};GM_xmlhttpRequest({method:"GET",
-timeout:8e3,url:"https://cn.bing.com/search?q="+encodeURIComponent(e)+"&mkt=zh-CN",headers:{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},onload:e=>{try{const t=[];if((e.responseText||"").split('class="b_algo"').slice(1).forEach(e=>{
+const o=[],r=/class="result__(?:snippet|a)"[^>]*>([\s\S]*?)<\/a>/g;let i;for(;null!==(i=r.exec(t.responseText||""));){const e=i[1].replace(/<[^>]+>/g,"").replace(/\s+/g," ").trim();e&&o.push(e)}if(o.length)return n(o.join("\n").slice(0,3e3));L.log("DDG 结果为空，改用 Bing 重试","warn"),L.searchBing(e,n)
+}catch(e){L.log("检索解析失败: "+e.message,"error"),n("")}},onerror:()=>{L.log("检索网络错误（DDG 可能被墙），改用 Bing 重试","warn"),L.searchBing(e,n)},ontimeout:()=>{L.log("检索超时（8s），改用 Bing 重试","warn"),L.searchBing(e,n)}}):L.searchBing(e,n)},searchBing(e,t){const n=e=>{try{t(e||"")}catch(e){}};GM_xmlhttpRequest({
+method:"GET",timeout:8e3,url:"https://cn.bing.com/search?q="+encodeURIComponent(e)+"&mkt=zh-CN",headers:{"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},onload:e=>{try{const t=[];if((e.responseText||"").split('class="b_algo"').slice(1).forEach(e=>{
 const n=e.replace(/^[^<]+/,"").replace(/<script[\s\S]*?<\/script>/gi,"").replace(/<[^>]+>/g," ").replace(/\s+/g," ").trim().slice(0,400);n.length>=10&&t.push(n)}),t.length)return n(t.join("\n").slice(0,3e3));L.log("检索解析失败（Bing 返回无结果块），已跳过检索直接作答","error"),n("")}catch(e){
 L.log("检索解析失败: "+e.message,"error"),n("")}},onerror:()=>{L.log("检索网络错误（Bing），已跳过检索直接作答","error"),n("")},ontimeout:()=>{L.log("检索超时（8s），已跳过检索直接作答","error"),n("")}})},parseAnswer(e,t,n,o){const r=String(e||"").trim();if(!r)return null;if("subjective"===t)return r;if("cloze"===t){
 const e=r.split(/\n+/).map(e=>e.trim()).filter(Boolean),t=/^\s*[（(]?\d{1,2}\s*[\.、\)．:：）]\s*/,n=e.length>1&&e.every(e=>{if(!t.test(e))return!1;const n=e.replace(t,"");return n.length>0&&/[^\d\s\.．、。:：]/.test(n)}),o=e.map(e=>(n?e.replace(t,""):e).replace(/[\.．、。]\s*$/,"").trim()).filter(Boolean)
@@ -213,4 +213,4 @@ L.log("🎬 视频弹题: "+o.slice(0,50)+(o.length>50?"…":"")+(r?"（多选�
 void L.log(be[a]>=2?"弹题连续作答失败，留人工处理（视频将保持暂停）":"弹题未取得答案，稍后重试","error");const n=String(t).toUpperCase().replace(/[^A-H]/g,"").split("");let o=0;for(const e of n){let t=i.find(t=>t.letter===e)||i[e.charCodeAt(0)-65];if(!t)continue
 ;const n=t.node.querySelector('input[type="radio"], input[type="checkbox"]');if(n&&(!r||!n.checked)){try{n.click()}catch(e){}o++}}return o?(L.log("弹题已选 "+n.join(""),"ok"),s.confirmAnswer?(xe="filled",void L.progress("⏸ 弹题已填，待人工确认")):void setTimeout(()=>{
 const t=e.querySelector(".el-dialog__footer .el-button");if(!t||t.disabled||(t.className||"").indexOf("is-disabled")>=0)xe="";else{try{t.click()}catch(e){}L.log("弹题已提交，提交后自动关闭续播","ok"),xe="submitted"}},600)):(xe="",be[a]=(be[a]||0)+1,void L.log("弹题选项点击失败，留人工处理","error"))})))}()}catch(e){
-console.log("[XIA-marker] 异常",e)}},2500),Se(),setInterval(()=>{try{_e(!1)}catch(e){console.log("[XIA-deadline] 异常",e)}},o),_e(!1),console.log("[XinweiAutoStudy] 已加载 v3.15.0")))}();
+console.log("[XIA-marker] 异常",e)}},2500),Se(),setInterval(()=>{try{_e(!1)}catch(e){console.log("[XIA-deadline] 异常",e)}},o),_e(!1),console.log("[XinweiAutoStudy] 已加载 v3.15.1")))}();

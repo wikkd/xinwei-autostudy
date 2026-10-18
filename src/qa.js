@@ -244,14 +244,14 @@ const XIA_AI = {
                         }
                         if (out.length) return done(out.join('\n').slice(0, maxChars));
                         XIA_AI.log('DDG 结果为空，改用 Bing 重试', 'warn');
-                        searchBing(query, done);
+                        XIA_AI.searchBing(query, done);
                     } catch (e) { XIA_AI.log('检索解析失败: ' + e.message, 'error'); done(''); }
                 },
-                onerror: () => { XIA_AI.log('检索网络错误（DDG 可能被墙），改用 Bing 重试', 'warn'); searchBing(query, done); },
-                ontimeout: () => { XIA_AI.log('检索超时（8s），改用 Bing 重试', 'warn'); searchBing(query, done); },
+                onerror: () => { XIA_AI.log('检索网络错误（DDG 可能被墙），改用 Bing 重试', 'warn'); XIA_AI.searchBing(query, done); },
+                ontimeout: () => { XIA_AI.log('检索超时（8s），改用 Bing 重试', 'warn'); XIA_AI.searchBing(query, done); },
             });
         } else {
-            searchBing(query, done);
+            XIA_AI.searchBing(query, done);
         }
     },
 

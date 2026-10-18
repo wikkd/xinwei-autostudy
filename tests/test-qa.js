@@ -58,6 +58,7 @@ const eq = (label, got, want) => {
     if (got === want) pass++;
     else { fail++; console.log('FAIL ' + label + '\n  got:  ' + JSON.stringify(got) + '\n  want: ' + JSON.stringify(want)); }
 };
+const ok = (label, cond) => eq(label, !!cond, true);
 
 // ---- 夹具：单选题（index-name 字母 + 原生 input，与平台 el-radio 同构）----
 function singleChoice(id) {
@@ -352,6 +353,42 @@ function subjectiveFixture(opts) {
     const saved = JSON.parse(window.GM_getValue('xa_img_skipped', '[]'));
     eq('图片记录：带判定器版本', saved.length > 0 && saved.every(x => x.v === 2), true);
     eq('图片记录：旧记录被清理', saved.some(x => !x.v), false);
+}
+
+// ===== ⑨ 检索链路回归（v3.15.1）：DDG 失败必须落到 Bing 且 done 一定被调用 =====
+// 旧版在对象方法里裸调用 searchBing → ReferenceError，done 回调永不触发，答题流程整体卡死
+{
+    resetAI(false);
+    conf.searchProvider = 'duckduckgo';
+    let calls = [];
+    window.GM_xmlhttpRequest = opts => { calls.push(opts); };
+    let got = 'HANG';
+    XIA_AI.searchWeb('测试检索词', ctx => { got = ctx; });
+    // 第一次（DDG）超时 → 自动重试 Bing；第二次（Bing）返回正常结果块
+    const bingCtx = '<li class="b_algo" data-a="1"><h2><a>标题一</a></h2><p>V2 是火箭的内容服务正文摘要，足够长起码十个汉字以上。</p></li>'
+        + '<li class="b_algo"><h2><a>标题二</a></h2><p>第二条结果的摘要内容。</p></li>';
+    if (calls.length !== 1) eq('检索回归：先请求 DDG 仅 1 次', calls.length, 1);
+    if (calls.length === 1) {
+        eq('检索回归：DDG 地址正确', calls[0].url.indexOf('html.duckduckgo.com'), 8);
+        calls[0].ontimeout(); // DDG 超时 → 应触发 Bing 重试而不是卡死
+        eq('检索回归：超时后补发 Bing 请求', calls.length, 2);
+        eq('检索回归：回退到 cn.bing.com', calls[1].url.indexOf('cn.bing.com/search?q='), 8);
+        calls[1].onload({ responseText: bingCtx });
+    }
+    ok('检索回归：DDG 超时回退 Bing 且不再卡死', typeof got === 'string' && got.indexOf('标题一') >= 0 && got.indexOf('第二条结果') >= 0);
+}
+{
+    // provider=bing 默认链路：直接命中 searchBing，结果解析出标题+摘要
+    resetAI(false);
+    conf.searchProvider = 'bing';
+    let calls = [];
+    window.GM_xmlhttpRequest = opts => { calls.push(opts); };
+    let got = 'HANG';
+    XIA_AI.searchWeb('测试检索词', ctx => { got = ctx; });
+    eq('检索回归：bing 直连仅 1 次请求', calls.length, 1);
+    eq('检索回归：bing 地址正确', calls[0].url.indexOf('cn.bing.com/search?q='), 8);
+    calls[0].onload({ responseText: 'junk-prefix placeholder\n<li class="b_algo" x="y"><div>仅有的十个汉字以上长度的合法结果内容摘要</div></li>' });
+    ok('检索回归：bing 解析非空且回调触发', typeof got === 'string' && got.indexOf('合法结果') >= 0);
 }
 
 console.log(fail ? ('\n' + fail + ' FAILED / ' + (pass + fail)) : ('✅ ' + pass + '/' + (pass + fail) + ' qa state-machine tests passed'));
