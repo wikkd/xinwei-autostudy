@@ -40,18 +40,20 @@ const store = {};
 window.GM_getValue = (k, d) => (k in store ? store[k] : d);
 window.GM_setValue = (k, v) => { store[k] = String(v); };
 window.GM_xmlhttpRequest = () => {};
-const FILES = ['config.js', 'utils.js', 'sites.js', 'qa.js', 'popup.js'];
+const FILES = ['config.js', 'utils.js', 'sites.js', 'tools.js', 'qa.js', 'popup.js'];
 window.eval(FILES.map(f => fs.readFileSync(path.join(SRC, f), 'utf8')).join('\n') + `
 ;window.__T = {
     get conf() { return conf; },
     ai: XIA_AI,
+    tools: XA_TOOLS,
     markerTick: markerQuestionTick,
     imageQ: isImageAnswerQuestion,
     resetMarker: () => { _mqKey = ''; _mqState = ''; _mqFails = {}; },
 };`);
 window.loadCfg(); // 必须在解构前：loadCfg 会整体重赋值 conf，之后 getter 才返回最终对象
-const { conf, ai: XIA_AI, markerTick, resetMarker } = window.__T;
+const { conf, ai: XIA_AI, tools: XA_TOOLS, markerTick, resetMarker } = window.__T;
 const imageQ = window.__T.imageQ;
+const _realCallAI = XIA_AI.callAI; // 真实引用：部分用例会以 stub 覆盖 callAI，resetAI 统一恢复
 
 let pass = 0, fail = 0;
 const eq = (label, got, want) => {
@@ -81,8 +83,9 @@ function resetAI(confirmMode) {
         lastQuestionHash: '', answering: false, answeringOnce: false,
         _failHash: '', _failCount: 0, _skipHash: '', _skipCount: 0,
         _submitting: false, _lastSubmitTry: 0, _donePage: '', _nextAnswerAt: 0, _cfgError: null,
-        _lastNav: 0, _imgLogged: '',
+        _lastNav: 0, _imgLogged: '', _answerMemo: {},
     });
+    XIA_AI.callAI = _realCallAI;
     XIA_AI.stats = { answered: 0, submitted: 0, failed: 0 };
     resetMarker(); // 弹题状态机（popup.js 模块级 let，须经闭包复位）
     conf.autoAnswer = true;
@@ -145,8 +148,9 @@ function resetAI(confirmMode) {
     let calls = 0;
     XIA_AI.callAI = (q, cb) => { calls++; cb('A'); };
     XIA_AI.scan(); XIA_AI.scan(); XIA_AI.scan();
-    eq('失败熔断：恰好重试 3 次', calls, 3);
-    eq('失败熔断：标记 hash 跳过', XIA_AI.lastQuestionHash.length > 0, true);
+    // v3.16 起，回填失败重试复用会话内答案：3 轮重试只打 1 次 LLM，熔断语义不变
+    eq('失败熔断：重试轮次内 LLM 仅调用一次（会话复用）', calls, 1);
+    eq('失败熔断：3 轮重试后标记 hash 跳过', XIA_AI.lastQuestionHash.length > 0, true);
     eq('失败熔断：不误计已答', XIA_AI.stats.answered, 0);
     const c4 = calls;
     XIA_AI.scan();
@@ -389,6 +393,90 @@ function subjectiveFixture(opts) {
     eq('检索回归：bing 地址正确', calls[0].url.indexOf('cn.bing.com/search?q='), 8);
     calls[0].onload({ responseText: 'junk-prefix placeholder\n<li class="b_algo" x="y"><div>仅有的十个汉字以上长度的合法结果内容摘要</div></li>' });
     ok('检索回归：bing 解析非空且回调触发', typeof got === 'string' && got.indexOf('合法结果') >= 0);
+}
+
+// ===== ⑩ 会话内同题缓存（v3.16）：重进同题免二次 LLM 请求，直接复用答案 =====
+{
+    resetAI(false);
+    const fx = singleChoice('q10');
+    let calls = 0;
+    XIA_AI.callAI = (q, cb) => { calls++; cb('A'); };
+    XIA_AI.scan();
+    eq('会话缓存：首次作答调用 AI', calls, 1);
+    eq('会话缓存：答案已回填', fx.inputs[0].checked, true);
+    eq('会话缓存：答案已入缓存', Object.keys(XIA_AI._answerMemo).length, 1);
+    // 模拟重进同一份作业：题目重新渲染为未作答（isAnswered 复位 + hash 闸门复位）
+    fx.inputs[0].checked = false;
+    XIA_AI.lastQuestionHash = '';
+    XIA_AI.answering = false;
+    XIA_AI.scan();
+    eq('会话缓存：同题二次作答免请求', calls, 1);
+    eq('会话缓存：缓存答案直接回填', fx.inputs[0].checked, true);
+    eq('会话缓存：计入已答统计', XIA_AI.stats.answered, 2);
+}
+
+// ===== ⑪ <think> 内嵌剥离（v3.16）：网关把思考段拼进 content 时不得污染答案解析 =====
+{
+    eq('think剥离：单选取思考段之后的字母', XIA_AI.parseAnswer('<think>嗯，A 不太对，正确的是 B</think>\nB', 'single', 'AB'), 'B');
+    eq('think剥离：思考内提过 A 不误取', XIA_AI.parseAnswer('<think>先排除 A</think>答案：B', 'single', 'AB'), 'B');
+    eq('think剥离：未闭合 think 判解析失败', XIA_AI.parseAnswer('<think>我还在思考', 'single', 'AB'), null);
+    eq('think剥离：多选组合', XIA_AI.parseAnswer('<think>逐项分析…AC 正确</think>AC', 'multi', 'ABC'), 'AC');
+    ok('think剥离：主观题剥后取正文', XIA_AI.parseAnswer('<think>构思中</think>这是答案正文。', 'subjective') === '这是答案正文。');
+}
+
+// ===== ⑫ 代码题沙箱工具循环（mock runJs + mock 传输）：先运行验证再作答，观察消息正确回灌 =====
+function codeChoiceFixture(id) {
+    window.document.body.innerHTML = `
+<div class="homework-single-selected" id="${id}">
+  <div class="question-tag-score">单选 10 分</div>
+  <div class="topic-title">1. 以下 Python 代码的输出是什么？ print(sum(range(4)))</div>
+  <label class="el-radio"><span class="index-name">A.</span><span class="label"><span class="index-name">A.</span><span class="option-content">6</span></span><input type="radio" value="A"></label>
+  <label class="el-radio"><span class="index-name">B.</span><span class="label"><span class="index-name">B.</span><span class="option-content">10</span></span><input type="radio" value="B"></label>
+</div>
+<button class="toggle-button">下一题</button>
+<div id="xa-progress"></div><div id="xa-stats"></div><div id="xa-ai-log"></div>`;
+    return { inputs: window.document.querySelectorAll('#' + id + ' input[type="radio"]') };
+}
+{
+    resetAI(false);
+    conf.apiKey = 'sk-test'; // 工具循环走真实 callAI/_llmChat，需通过密钥检查（mock 只接管传输层）
+    const fx = codeChoiceFixture('q12');
+    const runs = [];
+    XA_TOOLS.runJs = (code, cb) => { runs.push(code); cb({ logs: ['6'], result: '6', error: null }); };
+    const reqs = [];
+    window.GM_xmlhttpRequest = opts => {
+        reqs.push(opts);
+        const content = reqs.length === 1
+            ? '先验证一下。\n```run\nconsole.log([0,1,2,3].reduce((a,b)=>a+b,0))\n```'
+            : '运行结果证实是 6。\n答案：A';
+        opts.onload({ responseText: JSON.stringify({ choices: [{ message: { content: content } }] }) });
+    };
+    XIA_AI.scan();
+    eq('代码题：模型请求了沙箱运行', runs.length, 1);
+    ok('代码题：传给沙箱的是 run 块内容', /reduce/.test(runs[0]));
+    eq('代码题：观察消息回灌（3 条消息）', JSON.parse(reqs[1].data).messages.length, 3);
+    ok('代码题：观察消息含运行结果', JSON.parse(reqs[1].data).messages[2].content.indexOf('表达式结果：6') >= 0);
+    eq('代码题：最终按字母作答 A', fx.inputs[0].checked, true);
+    eq('代码题：计入已答统计', XIA_AI.stats.answered, 1);
+}
+
+// ===== ⑬ 代码题运行额度耗尽：3 次上限后强制模型给最终答案，不失控 =====
+{
+    resetAI(false);
+    conf.apiKey = 'sk-test';
+    const fx = codeChoiceFixture('q13');
+    const runs = [];
+    XA_TOOLS.runJs = (code, cb) => { runs.push(code); cb({ logs: ['x'], result: 'x', error: null }); };
+    const reqs = [];
+    window.GM_xmlhttpRequest = opts => {
+        reqs.push(opts);
+        const content = reqs.length <= 4 ? '```run\nconsole.log(' + reqs.length + ')\n```' : '答案：B';
+        opts.onload({ responseText: JSON.stringify({ choices: [{ message: { content: content } }] }) });
+    };
+    XIA_AI.scan();
+    eq('代码题上限：沙箱只运行 3 次', runs.length, 3);
+    eq('代码题上限：第 4 次请求被格式纠正收尾', reqs.length, 5);
+    eq('代码题上限：最终答案仍正常回填', fx.inputs[1].checked, true);
 }
 
 console.log(fail ? ('\n' + fail + ' FAILED / ' + (pass + fail)) : ('✅ ' + pass + '/' + (pass + fail) + ' qa state-machine tests passed'));

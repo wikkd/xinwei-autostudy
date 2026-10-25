@@ -18,6 +18,7 @@
 - **答题间隔**（默认 0）：可设定每题答完后的等待秒数再答下一题，让答题节奏更接近人工。
 - **答题模式**（v3.12.0 起）：做题完全交给 AI 现场作答——不再维护任何答案缓存/回放；AI 未答出的题重试并留人工。
 - **检索增强（RAG）**（默认关闭）：对事实/时事类题目，答题前先通过 DuckDuckGo（免密钥）或 Tavily（需 Key）检索资料，提升准确率。检索会向外部引擎发送题目内容，属风险项，支持 `off / auto / always` 三档由用户显式开启。
+- **代码题本机沙箱执行**：判定为代码/程序类题目时，LLM 可要求在本机 Worker 沙箱实际运行 JavaScript（Python 等先翻译成等价 JS）验证推理——运行日志与结果回灌模型迭代（≤3 轮）后再作答。沙箱独立线程 5s 超时杀死死循环；网络 API（fetch/XHR/WebSocket）静态拦截，纯计算环境（软性封锁，对抗构造可绕过，代码来源为用户自配的 LLM）。
 - **图片作答题自动跳过**：题干要求上传图片 / 拍照作答的题目不调用 AI，记录跳过并在日志提示人工处理；作业巡航重进同一份作业时直接跳过。
 - **作业巡航**：开启自动答题后，自动打开作业列表逐份完成（列表 → 做作业 → 答题 → 提交 → 下一份）；也可点面板「🧭 巡航」从课程页一键进入。
 - **答完自动提交**（默认关闭）：精确匹配「提交作业」按钮并自动确认；平台提示有未答题时自动取消，留给人工补答。影响真实成绩，属高风险项。
@@ -42,8 +43,6 @@
 
 面板各开关的含义、答题确认模式与常见问题见 **[用户指南](docs/guide.md)**。
 
-一键部署（开发辅助）：`node deploy.js` 会自动构建 → 复制剪贴板 → 定位 ScriptCat 编辑器标签 → 粘贴保存（需 Chrome 已打开编辑器标签）。
-
 ---
 
 ## 构建（从源码）
@@ -64,15 +63,16 @@ src/
   config.js     全局配置 CFG / 持久化键 / loadCfg
   utils.js      通用工具：可见性判定、DOM 小工具、静音、防挂机、滚动、侧边栏穿透查找、exactText
   sites.js      站点适配层（beeline 平台 DOM）：题目容器选择器、题目解析、选项/答案提取、接口题目镜像
-  qa.js         AI 答题核心：状态机 / 检索 / LLM 调用与解析 / 回填 / 校验 / 提交 / 作业巡航
+  tools.js      本机沙箱代码执行（代码题工具）：Worker 沙箱 + 网络软封锁 + ```run 协议与结果回灌
+  qa.js         AI 答题核心：状态机 / 检索 / LLM 调用与解析（含代码题工具循环）/ 回填 / 校验 / 提交 / 作业巡航
   ui.js         控制面板 UI（CSS / DOM / 拖动 / 位置记忆 / 事件绑定）
   autoplay.js   自动刷课主循环与章节跳转
   popup.js      学习状态异常弹窗自动刷新
   bootstrap.js  入口：防重复注入、加载配置、挂载 UI、启动
 build.js        拼接 + 发布版瘦身 + terser 压缩（-42%，头部逐字节保留）+ 版本注入（__XA_VERSION__）
-deploy.js       一键部署到浏览器 ScriptCat（构建→剪贴板→编辑器粘贴保存）
 dist/           构建产物
-scripts/        仓库侧工具（sync-version.js 版本一致性检查）
+scripts/        仓库侧工具（sync-version.js 版本一致性检查；lint-bundle.js 生成 lint 用 bundle）
+eslint.config.js ESLint 扁平配置（bundle + 仓库侧 Node 文件，npm run lint）
 tests/          Node 测试（harness.js 直加载 src；run-all.js 跑全部套件；npm test = 构建+测试）
 .github/        CI（ci.yml：版本一致性 + 构建 + 语法 + 全量测试）
 legacy/         原始脚本与补丁（仅作参考，不再维护）
@@ -84,7 +84,8 @@ legacy/         原始脚本与补丁（仅作参考，不再维护）
 - 版本号只改 `src/meta.js` 的 `@version`；`bootstrap.js` 内的 `__XA_VERSION__` 由构建注入；安装后跑 `npm run version:check` 可验证 `package.json` 同步（CI 强制）。
 - 测试使用 `tests/harness.js` 从 src 直加载（vm 沙箱），不再从 dist 抠函数文本——函数签名变更会立刻显式报错。
 - **发布版压缩**：`build.js` 用 terser 只压 IIFE 主体（头部逐字节保留，扩展靠它识别脚本），体积 155→91 KB（-42%）。terser 缺失时自动降级为未压缩构建；`node build.js --no-min` 可强制跳过。压缩产物的回归由 `tests/test-dist.js`（结构/字符串清单/体积闸门）与 `tests/test-startup.js`（jsdom 真实执行启动）覆盖，`node tests/run-all.js` 一并运行。
-- 开发依赖：`npm i`（terser 压缩必需、jsdom 启动测试必需；两者缺失时相应环节优雅跳过并提示）。
+- **Lint 门禁**：`npm run lint` 用 ESLint 检查两块——src 按 `BODY_ORDER` 拼接后的未压缩 bundle（`scripts/lint-bundle.js` 生成到 `tmp/`，浏览器 + GM_* 环境；跨模块 `no-undef` 只有拼接后才可判）与仓库侧 Node 文件（build/scripts/tests）。CI 强制。之所以不逐文件 lint src：模块共享 IIFE 作用域，单文件视角跨模块符号全是误报。
+- 开发依赖：`npm i`（terser 压缩必需、jsdom 启动测试必需、eslint/@eslint/js/globals lint 必需；缺失时相应环节优雅跳过并提示）。
 
 ---
 
@@ -94,9 +95,9 @@ legacy/         原始脚本与补丁（仅作参考，不再维护）
 
 | 项 | 说明 | 默认 |
 | --- | --- | --- |
-| API Key | 你自己的大模型密钥（不上报） | 空 |
+| API Key | 你自己的大模型密钥（不上报）。保存即**自动加密**（本机设备密钥，无感）；可填口令升级为口令加密（密文被拷走也解不开，重启后需输口令） | 空 |
 | API Base URL | 兼容 OpenAI `/v1/chat/completions` 的端点 | `https://api.deepseek.com` |
-| 模型名称 | 如 `deepseek-chat` / `deepseek-flash` / `gpt-4o-mini` | `deepseek-chat` |
+| 模型名称 | 思考模型（`deepseek-reasoner` 等）自动放宽 token 与超时；也可用 `deepseek-chat` / `gpt-4o-mini` | `deepseek-reasoner` |
 | 检索模式 | `off` / `auto` / `always`（风险项，题目内容会发往外部引擎） | `off` |
 | 检索源 | `bing`（国内直连）/ `duckduckgo`（需代理）/ `tavily`（需 Key） | `bing` |
 | Tavily Key | 仅 Tavily 模式需要 | 空 |
@@ -104,6 +105,9 @@ legacy/         原始脚本与补丁（仅作参考，不再维护）
 | 答完自动提交 | 高风险项，影响真实成绩 | 关 |
 
 推荐白嫖：硅基流动 (SiliconFlow)、DeepSeek 官方等平台新用户通常赠送免费额度。
+
+> 关于 `meta.js` 中的 `@connect *`：API Base URL 由用户自行配置（任意 OpenAI 兼容端点），
+> 无法预先枚举全部域名，故必须开放通配；具体已知域名同时列出仅作文档参考。脚本不含任何数据上报。
 
 ---
 

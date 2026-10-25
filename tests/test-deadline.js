@@ -2,9 +2,9 @@
 // 运行：node tests/test-deadline.js（harness 直加载 src，无 DOM 依赖）
 const { loadSlice } = require('./harness');
 
-const { parseDeadline, deadlineLevel, deadlineItemsFromList } = loadSlice(
+const { parseDeadline, deadlineLevel, deadlineItemsFromList, deadlineStampAfter, CFG } = loadSlice(
     ['config.js', 'deadline.js'],
-    ['parseDeadline', 'deadlineLevel', 'deadlineItemsFromList']);
+    ['parseDeadline', 'deadlineLevel', 'deadlineItemsFromList', 'deadlineStampAfter', 'CFG']);
 
 let pass = 0, fail = 0;
 const eq = (label, got, want) => {
@@ -48,6 +48,12 @@ eq('条目透传标题', items[0].title, '第二章作业');
 eq('条目透传 paperId', items[0].paperId, 'p1');
 eq('临近条目级别', items[1].level, 1);
 eq('空列表安全', deadlineItemsFromList(null, 'x', NOW, 3).length, 0);
+
+// ===== deadlineStampAfter（v3.16：失败短重试，瞬断不放大成 30 分钟盲区）=====
+eq('失败重试：成功写本次时间（30 分钟节流）', deadlineStampAfter(NOW, true), NOW);
+eq('失败重试：失败写回拨时间戳', deadlineStampAfter(NOW, false), NOW - CFG.DEADLINE_CHECK_MS + CFG.DEADLINE_RETRY_MS);
+eq('失败重试：5 分钟后放行重查', (NOW + CFG.DEADLINE_RETRY_MS) - deadlineStampAfter(NOW, false) >= CFG.DEADLINE_CHECK_MS, true);
+eq('失败重试：4 分钟仍被节流', (NOW + CFG.DEADLINE_RETRY_MS - 60000) - deadlineStampAfter(NOW, false) < CFG.DEADLINE_CHECK_MS, true);
 
 console.log(fail ? ('\n' + fail + ' FAILED / ' + (pass + fail)) : ('✅ ' + pass + '/' + (pass + fail) + ' deadline tests passed'));
 process.exit(fail ? 1 : 0);

@@ -69,7 +69,9 @@ function interactiveOverlay() {
     return _ovCacheVal;
 }
 
-// 反挂机检测规避：伪造可见/聚焦状态 + 合成随机用户行为
+// 反挂机检测规避：伪造可见/聚焦状态 + 合成随机鼠标移动/按键/滚动。
+// 刻意不合成点击：合成事件 isTrusted=false 骗不过服务端风控（调研实锤检测在服务端），
+// 而随机坐标点击可能误触倍速/音量/侧栏等真实控件，引发意外状态变更，得不偿失。
 let _poseInstalled = false; // 属性劫持只装一次（每 tick 重复 defineProperty 无意义且耗性能）
 function keepPlay() {
     const overlay = interactiveOverlay(); // 弹题/答题浮层期间不催播（避让平台刻意的暂停）
@@ -99,15 +101,6 @@ function keepPlay() {
         }));
     } catch (e) {}
 
-    if (!overlay && Math.random() > 0.75) { // 浮层期间不合成点击（防误点弹题/弹窗按钮）
-        try {
-            const t = document.elementFromPoint(x, y) || document.body;
-            t.dispatchEvent(new MouseEvent('click', {
-                bubbles: true, cancelable: true, view: window,
-                clientX: x, clientY: y, button: 0,
-            }));
-        } catch (e) {}
-    }
     if (Math.random() > 0.88) {
         try {
             const key = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageDown', 'PageUp'][randInt(0, 6)];
@@ -191,4 +184,48 @@ function exactText(selector, text) {
     let hit = null;
     qsa(selector).forEach(el => { if (!hit && visible(el) && qtextAll(el) === text) hit = el; });
     return hit;
+}
+
+// ==================== API Key 加密保存（可选）====================
+// GM 存储不再留明文密钥：口令经 PBKDF2(210k 迭代)派生 AES-GCM-256 密钥加密，盐/IV 每次随机，
+// 密文记录 {v,s,i,c} 落 GM 存储，明文同时清除。口令只存 sessionStorage 复用——页面脚本读得到
+// 口令，但读不到扩展 GM 存储里的密文，两者拼不到一起。
+// 边界如实说明：解密后的密钥必须驻留内存供请求使用，本方案防的是存储侧直接翻看与浏览器
+// 配置文件/同步泄露，防不了能读脚本内存或浏览器控制台的对手。crypto.subtle 需安全上下文（芯位为 https）。
+async function xaEncEncrypt(pass, text) {
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt: salt, iterations: 210000, hash: 'SHA-256' },
+        await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']),
+        { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, new TextEncoder().encode(text));
+    const b64 = buf => btoa(String.fromCharCode.apply(null, new Uint8Array(buf)));
+    return { v: 1, s: b64(salt), i: b64(iv), c: b64(ct) };
+}
+
+// 解密失败（口令错误/记录损坏）统一返回 null，由调用方给出提示
+async function xaEncDecrypt(pass, rec) {
+    try {
+        const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+        const key = await crypto.subtle.deriveKey(
+            { name: 'PBKDF2', salt: unb64(rec.s), iterations: 210000, hash: 'SHA-256' },
+            await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']),
+            { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+        const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(rec.i) }, key, unb64(rec.c));
+        return new TextDecoder().decode(pt);
+    } catch (e) { return null; }
+}
+
+// 本机设备密钥（自动加密模式）：首次调用随机生成 32 字节并存 GM，此后稳定复用。
+// 安全边界：与密文同存一处——防的是存储被随手翻看/明文被一眼复制走；
+// 防不了定向的整配置文件窃取（设备密钥跟着密文一起被拿走），那需要口令模式。
+function xaDevKey() {
+    let k = '';
+    try { k = String(GM_getValue(SK.devKey, '') || ''); } catch (e) {}
+    if (k) return k;
+    const raw = crypto.getRandomValues(new Uint8Array(32));
+    k = btoa(String.fromCharCode.apply(null, raw));
+    try { GM_setValue(SK.devKey, k); } catch (e) {}
+    return k;
 }

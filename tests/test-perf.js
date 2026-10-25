@@ -1,7 +1,6 @@
 // 性能优化回归测试：路由短路判定 + 批量落盘语义
 // 运行：node tests/test-perf.js（harness 直加载 src）
 const fs = require('fs');
-const path = require('path');
 const { loadSlice, readModules } = require('./harness');
 
 // routeHasQuestions 是 scan 的性能短路闸门：漏放行 = 静默不答题（比漏拦截危险）

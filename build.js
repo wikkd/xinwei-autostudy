@@ -18,7 +18,7 @@ const OUTPUT = path.join(DIST_DIR, 'xinwei-autostudy.user.js');
 
 // 压缩：UserScript 头必须原样保留（扩展解析依赖它），只对 IIFE 主体跑 terser。
 // terser 是可选 devDependency——未安装（如裸 clone 后）自动降级为未压缩构建并提示。
-function tryMinify(body, version) {
+function tryMinify(body) {
     let terser = null;
     try { terser = require('terser'); } catch (e) {}
     if (!terser) {
@@ -47,6 +47,7 @@ const BODY_ORDER = [
     'config.js',
     'utils.js',
     'sites.js',
+    'tools.js',
     'qa.js',
     'ui.js',
     'autoplay.js',
@@ -80,7 +81,10 @@ function slim(code) {
     return out.join('\n');
 }
 
-function build() {
+// 组装完整脚本文本（不写盘）。minify=false 输出未压缩版（scripts/lint-bundle.js 等
+// 仓库侧工具用：lint 必须吃按 BODY_ORDER 拼接的完整 IIFE，跨模块符号解析才有意义）。
+// 返回 { code, version, rawKb }；rawKb 为压缩前体积（压缩后与 code 重算差值）。
+function makeBundle(minify) {
     const meta = read(path.join(SRC_DIR, 'meta.js')).trimEnd();
     const version = extractVersion(meta);
     const parts = BODY_ORDER.map(f => slim(read(path.join(SRC_DIR, f))).replace(/__XA_VERSION__/g, version));
@@ -97,36 +101,46 @@ function build() {
     // 构建期自检：占位符必须全部替换（防新文件漏加替换逻辑）
     if (bundle.includes('__XA_VERSION__')) throw new Error('版本占位符 __XA_VERSION__ 替换失败');
 
-    // 压缩（头注释与 IIFE 主体分开处理；保证头部逐字节不变）
-    const noMin = process.argv.includes('--no-min');
     const rawKb = Buffer.byteLength(bundle, 'utf8') / 1024;
-    if (!noMin) {
+    if (minify) {
+        // 压缩（头注释与 IIFE 主体分开处理；保证头部逐字节不变）
         const headEnd = bundle.indexOf('\n(function () {');
         if (headEnd > 0) {
             const head = bundle.slice(0, headEnd);
             const body = bundle.slice(headEnd + 1);
-            bundle = head + '\n' + tryMinify(body, version);
+            bundle = head + '\n' + tryMinify(body);
         }
     }
+    return { code: bundle, version: version, rawKb: rawKb };
+}
+
+function build() {
+    const noMin = process.argv.includes('--no-min');
+    const r = makeBundle(!noMin);
+    const bundle = r.code;
 
     if (!fs.existsSync(DIST_DIR)) fs.mkdirSync(DIST_DIR, { recursive: true });
     fs.writeFileSync(OUTPUT, bundle, 'utf8');
 
     const kb = (Buffer.byteLength(bundle, 'utf8') / 1024).toFixed(1);
-    const cut = noMin ? '' : '（压缩前 ' + rawKb.toFixed(1) + ' KB，-'
-        + (100 - Buffer.byteLength(bundle, 'utf8') / (rawKb * 1024) * 100).toFixed(0) + '%）';
-    console.log('✅ 构建完成 v' + version + ' -> ' + OUTPUT + ' (' + kb + ' KB) ' + cut);
+    const cut = noMin ? '' : '（压缩前 ' + r.rawKb.toFixed(1) + ' KB，-'
+        + (100 - Buffer.byteLength(bundle, 'utf8') / (r.rawKb * 1024) * 100).toFixed(0) + '%）';
+    console.log('✅ 构建完成 v' + r.version + ' -> ' + OUTPUT + ' (' + kb + ' KB) ' + cut);
     return bundle;
 }
 
-build();
+module.exports = { makeBundle, BODY_ORDER };
 
-if (process.argv.includes('--watch')) {
-    console.log('👀 watch 模式已开启，修改 src/ 将自动重建（无额外依赖，使用 fs.watch）');
-    const watched = BODY_ORDER.concat(['meta.js']).map(f => path.join(SRC_DIR, f));
-    watched.forEach(f => {
-        fs.watch(f, () => {
-            try { build(); } catch (e) { console.error('构建失败:', e.message); }
+if (require.main === module) {
+    build();
+
+    if (process.argv.includes('--watch')) {
+        console.log('👀 watch 模式已开启，修改 src/ 将自动重建（无额外依赖，使用 fs.watch）');
+        const watched = BODY_ORDER.concat(['meta.js']).map(f => path.join(SRC_DIR, f));
+        watched.forEach(f => {
+            fs.watch(f, () => {
+                try { build(); } catch (e) { console.error('构建失败:', e.message); }
+            });
         });
-    });
+    }
 }

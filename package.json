@@ -1,6 +1,6 @@
 {
   "name": "xinwei-autostudy",
-  "version": "3.15.1",
+  "version": "3.16.0",
   "description": "基于大语言模型的网课学习辅助用户脚本（自动刷课 + AI 答题 + 检索增强），MIT 开源。",
   "private": false,
   "scripts": {
@@ -8,12 +8,15 @@
     "watch": "node build.js --watch",
     "test": "node build.js && node tests/run-all.js",
     "test:only": "node tests/run-all.js",
+    "lint": "node scripts/lint-bundle.js && eslint .",
     "version:check": "node scripts/sync-version.js",
-    "version:sync": "node scripts/sync-version.js --write",
-    "deploy": "node deploy.js"
+    "version:sync": "node scripts/sync-version.js --write"
   },
   "license": "MIT",
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0",
     "jsdom": "^26.0.0",
     "terser": "^5.51.2"
   },

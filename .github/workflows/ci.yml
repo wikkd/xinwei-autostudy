@@ -26,6 +26,9 @@ jobs:
       - name: Version consistency (meta.js is the single source)
         run: node scripts/sync-version.js
 
+      - name: Lint (eslint: src 拼接 bundle + 仓库侧 Node 文件)
+        run: npm run lint
+
       - name: Build (with terser minification)
         run: node build.js
 

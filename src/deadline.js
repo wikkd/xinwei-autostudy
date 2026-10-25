@@ -120,13 +120,21 @@ function renderDeadlineBanner(summary) {
     el.className = 'xa-deadline' + (urgent ? ' urgent' : '');
 }
 
+// 纯函数：本次检查结束后应写入 xa_deadline_last_at 的时间戳。
+// 成功 → 本次时间（正常 30 分钟节流）；失败 → 回拨「30 分钟 - 5 分钟」，即 5 分钟后放行重试。
+// 时间戳必须等结果出来再写：若像旧版那样请求前就写，网络瞬断/401 会被节流放大成
+// 30 分钟的截止提醒盲区（用户刷新页面也不会重查）。
+function deadlineStampAfter(nowMs, ok) {
+    return ok ? nowMs : nowMs - CFG.DEADLINE_CHECK_MS + CFG.DEADLINE_RETRY_MS;
+}
+
 // 检查入口。force=true 跳过节流（面板按钮）；平时由定时器驱动（GM 时间戳 30 分钟节流，跨刷新生效）。
 function deadlineCheck(force) {
     const now = Date.now();
     if (!force && now - Number(GM_getValue(SK.deadlineLastAt, 0)) < CFG.DEADLINE_CHECK_MS) return;
-    GM_setValue(SK.deadlineLastAt, String(now));
     fetchDeadlineItems(items => {
-        if (items === null) return; // 课表接口失败：静默保留旧横幅
+        GM_setValue(SK.deadlineLastAt, String(deadlineStampAfter(now, items !== null)));
+        if (items === null) return; // 课表接口失败：静默保留旧横幅（5 分钟后自动重试）
         const summary = { at: now, items: items };
         try { GM_setValue(SK.deadlineSummary, JSON.stringify(summary)); } catch (e) {}
         renderDeadlineBanner(summary);
@@ -142,6 +150,7 @@ function deadlineCheck(force) {
 
 function initDeadlineWatch() {
     renderDeadlineBanner(); // 先用上次结果展示（免请求）
-    setInterval(() => { try { deadlineCheck(false); } catch (e) { console.log('[XIA-deadline] 异常', e); } }, CFG.DEADLINE_CHECK_MS);
+    // 定时器 1 分钟轻驱动一次：30 分钟节流由 GM 时间戳把关；失败后的 5 分钟短重试也靠它到点触发
+    setInterval(() => { try { deadlineCheck(false); } catch (e) { console.log('[XIA-deadline] 异常', e); } }, 60000);
     deadlineCheck(false); // 启动即查（内部节流，30 分钟内不重复打接口）
 }

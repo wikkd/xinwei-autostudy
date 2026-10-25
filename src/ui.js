@@ -145,8 +145,12 @@ function buildPanel() {
     <div class="xa-sec">🔌 接口配置</div>
     <div class="xa-ai-inputs">
       <input class="xa-input" id="xa-apikey" type="password" placeholder="API Key（sk-xxxxxxxx）" />
+      <div class="xa-row" style="gap:6px;">
+        <input class="xa-input" id="xa-pass" type="password" placeholder="🔒 口令（可选加固：拷走密文也解不开）" style="flex:1;min-width:0;" />
+        <button class="xa-btn xa-stop" id="xa-enc-btn" style="flex:none;width:92px;padding:8px 0;font-size:12px;letter-spacing:0;">🔒 加密保存</button>
+      </div>
       <input class="xa-input" id="xa-apibase" type="text" placeholder="API Base（https://api.deepseek.com）" />
-      <input class="xa-input" id="xa-model" type="text" placeholder="模型名（deepseek-chat / gpt-4o-mini）" />
+      <input class="xa-input" id="xa-model" type="text" placeholder="模型名（deepseek-reasoner / deepseek-chat / gpt-4o-mini）" />
     </div>
     <div class="xa-sec">🔍 检索增强</div>
     <div class="xa-ai-inputs">
@@ -309,9 +313,117 @@ function bindUI() {
         el.addEventListener('change', save);
         el.addEventListener('blur', save);
     };
-    saveInput('apiKey', apikeyInput);
-    saveInput('apiBase', apibaseInput);
-    saveInput('model', modelInput);
+    // ===== API Key 加密保存：默认自动（本机设备密钥，无感），可选口令加固 =====
+    // 自动模式：密钥以首次随机生成、存于本机的设备密钥加密落盘，明文即刻清除——防存储被
+    // 随手翻看/明文被直接复制。设备密钥与密文同存一处，防不了定向整配置窃取（需口令模式）。
+    const passInput = document.getElementById('xa-pass');
+    const encBtn = document.getElementById('xa-enc-btn');
+    const encRec = () => { try { return JSON.parse(GM_getValue(SK.apiKeyEnc, 'null')); } catch (e) { return null; } };
+    const encActive = () => !!GM_getValue(SK.apiKeyEnc, '');
+    const sessPass = () => { try { return sessionStorage.getItem('xa_kp') || ''; } catch (e) { return ''; } };
+    const setSessPass = pv => { try { sessionStorage.setItem('xa_kp', pv); } catch (e) {} };
+    const writeEnc = async (pass, key, mode) => {
+        const rec = await xaEncEncrypt(pass, key);
+        rec.m = mode; // dev=本机自动 / pass=口令（旧格式记录无 m，按 pass 处理）
+        GM_setValue(SK.apiKeyEnc, JSON.stringify(rec));
+        GM_setValue(SK.apiKey, ''); // 明文即刻清除：GM 存储只留密文
+    };
+    function refreshEncBtn() { encBtn.textContent = (encActive() && !conf.apiKey) ? '🔓 解锁' : '🔒 加密保存'; }
+    function aiReady(note) { setAIStatus(true, 'AI 引擎已就绪（' + note + '）'); }
+    async function tryUnlock(pass, silent) {
+        if (!pass || !encActive()) return false;
+        const key = await xaEncDecrypt(pass, encRec());
+        if (!key) {
+            if (!silent) { XIA_AI.log('🔒 口令错误或密文损坏，解锁失败', 'error'); setAIStatus(false, '解锁失败：口令错误'); }
+            return false;
+        }
+        conf.apiKey = key;
+        apikeyInput.value = key;
+        setSessPass(pass);
+        XIA_AI.log('🔒 加密密钥已解锁（本会话有效；本地存储无明文）', 'ok');
+        aiReady('加密解锁');
+        refreshEncBtn();
+        return true;
+    }
+    // 启动自动解锁：dev 记录用本机设备密钥静默解密（全自动无感）；pass 记录用
+    // sessionStorage 口令静默解锁，否则等用户输入。旧格式（无 m）按 pass 处理。
+    (async () => {
+        const rec = encRec();
+        if (!rec || conf.apiKey) { refreshEncBtn(); return; }
+        if (rec.m === 'dev') {
+            const key = await xaEncDecrypt(xaDevKey(), rec);
+            if (key) {
+                conf.apiKey = key;
+                apikeyInput.value = key;
+                XIA_AI.log('🔒 已用本机设备密钥自动解锁（存储无明文）', 'ok');
+                aiReady('自动加密');
+            } else {
+                XIA_AI.log('⛔ 自动解锁失败：设备密钥与密文不匹配（存储可能复制自其他设备/浏览器），请重新填写 API Key', 'error');
+                setAIStatus(false, '自动解锁失败，请重填 Key');
+            }
+        } else if (!await tryUnlock(sessPass(), true)) {
+            setAIStatus(false, '密钥已加密，输入口令点「🔓 解锁」');
+        }
+        refreshEncBtn();
+    })();
+    // 按钮：锁定时=解锁；填了口令=口令加密保存（加固）；自动模式无需手动操作
+    encBtn.addEventListener('click', async () => {
+        if (encActive() && !conf.apiKey) { tryUnlock(passInput.value, false); return; }
+        const key = apikeyInput.value.trim();
+        const pass = passInput.value;
+        if (!key || !pass) { XIA_AI.log('自动加密无需手动操作：填写口令后点此按钮可切换为口令加固（密文被拷走也解不开）', 'info'); return; }
+        try {
+            await writeEnc(pass, key, 'pass');
+            conf.apiKey = key;
+            setSessPass(pass);
+            XIA_AI.log('🔒 API Key 已按口令加密保存（AES-GCM-256）：浏览器重启后需输口令解锁', 'ok');
+            aiReady('口令加密');
+            refreshEncBtn();
+        } catch (e) {
+            XIA_AI.log('加密失败（需 https 页面与 WebCrypto 支持）: ' + (e && e.message ? e.message : e), 'error');
+        }
+    });
+    passInput.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && encActive() && !conf.apiKey) tryUnlock(passInput.value, false);
+    });
+    refreshEncBtn();
+
+    // apiKey 保存（覆盖通用 saveInput）：默认自动设备密钥加密；填了口令则口令模式；
+    // 原为口令模式且本会话已解锁时保持口令模式不降级
+    const saveApiKey = async () => {
+        const v = apikeyInput.value.trim();
+        conf.apiKey = v;
+        if (XIA_AI._cfgError) { XIA_AI._cfgError = null; XIA_AI.log('配置已更新，自动答题恢复', 'ok'); }
+        if (!v) { // 清空 Key：明文密文一起清
+            GM_setValue(SK.apiKey, '');
+            GM_setValue(SK.apiKeyEnc, '');
+            refreshEncBtn();
+            return;
+        }
+        const pass = passInput.value;
+        const rec = encRec();
+        try {
+            if (pass) {
+                await writeEnc(pass, v, 'pass');
+                setSessPass(pass);
+                XIA_AI.log('🔒 密钥已按口令加密保存', 'ok');
+            } else if (rec && rec.m !== 'dev' && sessPass()) {
+                await writeEnc(sessPass(), v, 'pass');
+                XIA_AI.log('🔒 密钥已更新，保持口令加密', 'ok');
+            } else {
+                await writeEnc(xaDevKey(), v, 'dev');
+                XIA_AI.log(rec && rec.m !== 'dev'
+                    ? '口令不在本会话，已改为本机自动加密（填写口令可加固）' : '🔒 密钥已自动加密保存（本机设备密钥，无需口令）', rec && rec.m !== 'dev' ? 'info' : 'ok');
+            }
+        } catch (e) {
+            GM_setValue(SK.apiKey, v); // 加密不可用时回退明文，不能丢 Key
+            XIA_AI.log('加密不可用（需 https/WebCrypto），密钥以明文保存', 'error');
+        }
+        refreshEncBtn();
+    };
+    apikeyInput.addEventListener('change', saveApiKey);
+    apikeyInput.addEventListener('blur', saveApiKey);
+    saveInput('apiBase', apibaseInput);    saveInput('model', modelInput);
     saveInput('searchMode', searchModeInput);
     saveInput('searchProvider', searchProviderInput);
     saveInput('searchApiKey', searchApiKeyInput);

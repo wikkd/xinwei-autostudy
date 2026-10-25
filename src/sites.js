@@ -68,7 +68,7 @@ function xaApiMirrorTopic(t) {
         return { letter: letter, text: idx.toUpperCase() + '.' + xaApiPlain(o.content) };
     });
     const right = (t.topicRightAnswerList || []).map(x => String(x == null ? '' : x).trim()).filter(Boolean);
-    let answer = '';
+    let answer;
     if (type === 'subjective') answer = xaApiPlain(right.join(' ')).slice(0, 1500);
     else if (type === 'cloze') answer = right.join(',').split(',').map(s => s.trim()).filter(Boolean).join('|');
     else if (rawType === 'panduan') {
@@ -259,4 +259,7 @@ function parseQuestionRoot(root) {
 const QA = {
     questionRoot, questionType, isAnswered, letterOf, allSelected,
     questionScore, extractOptions, questionTitle,
+    // 接口题目镜像（harvest 时代真机校准的接口契约）。运行期已无调用方，
+    // 但 test-mirror 以它守护「接口数据 ↔ DOM 解析同构」契约，留作适配层工具备查。
+    xaApiMirrorTopic,
 };

@@ -16,9 +16,10 @@ const CFG = {
     UNLOCK_CHECK_MS: 600000,// 锁定章守望检查间隔（10 分钟）：所有节完成后仍有未开放章时，定期复查是否解锁
     DEADLINE_WARN_DAYS: 3,  // 作业截止提醒阈值：未完成作业距截止 ≤N 天时在面板提醒（≤24h 升级为紧急）
     DEADLINE_CHECK_MS: 1800000, // 截止检查间隔（30 分钟，GM 时间戳节流，跨刷新生效）
+    DEADLINE_RETRY_MS: 300000,  // 检查失败后的短重试间隔（5 分钟）：瞬断不放大成 30 分钟提醒盲区
 
     DEFAULT_API_BASE: 'https://api.deepseek.com',
-    DEFAULT_MODEL: 'deepseek-chat',
+    DEFAULT_MODEL: 'deepseek-reasoner', // 思考模型：qa.callAI 按模型名命中 reasoning 正则，自动放宽 max_tokens/超时
     DEFAULT_SEARCH_PROVIDER: 'bing', // bing(国内直连) / duckduckgo(可能被墙) / tavily(需Key)
     DEFAULT_SEARCH_MODE: 'off',            // off / auto / always；默认 off：检索会向外部引擎发送题目内容，风险项用户显式开启
     SEARCH_MAX_CHARS: 3000,
@@ -27,6 +28,8 @@ const CFG = {
 // 持久化键（GM_setValue / GM_getValue）
 const SK = {
     apiKey: 'xa_apikey', apiBase: 'xa_apibase', model: 'xa_model',
+    apiKeyEnc: 'xa_apikey_enc', // API Key 加密记录 {v,m,s,i,c}（m: dev=本机自动 / pass=口令；加密后明文清空）
+    devKey: 'xa_devkey',        // 本机设备密钥（自动加密模式用，首次随机生成；与密文同存，仅防随手翻看）
     autoAnswer: 'xa_autoanswer', autoPlay: 'xa_autoplay', autoSubmit: 'xa_autosubmit',
     confirmAnswer: 'xa_confirm_answer', // 答题确认模式：AI 填完暂停，人工核对后自行跳题/提交
     searchProvider: 'xa_search_provider', searchApiKey: 'xa_search_key', searchMode: 'xa_search_mode',
