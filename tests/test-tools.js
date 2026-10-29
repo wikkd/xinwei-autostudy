@@ -23,6 +23,19 @@ eq('判定：纯算术不误报', XA_TOOLS.needsCodeTool('计算 123+456 的结�
 eq('判定：普通主观题不误报', XA_TOOLS.needsCodeTool('简述新文化运动的历史意义'), false);
 eq('判定：空串安全', XA_TOOLS.needsCodeTool(''), false);
 
+// ===== needsWriteCode（主观题代码编写题：决定答题风格，与 needsCodeTool 互补）=====
+eq('写码：MATLAB while 脚本（真机截图题）', XA_TOOLS.needsWriteCode('请用 MATLAB 编写脚本，使用 while 循环计算 1 到 50 之间所有偶数的和，并将结果输出到命令窗口。'), true);
+eq('写码：Python 函数', XA_TOOLS.needsWriteCode('请编写 Python 函数判断一个数是否为素数'), true);
+eq('写码：C 语言程序', XA_TOOLS.needsWriteCode('用 C 语言编写程序求 1-100 之间所有素数之和'), true);
+eq('写码：实现排序算法', XA_TOOLS.needsWriteCode('用 Python 实现快速排序'), true);
+eq('写码：SQL 语句', XA_TOOLS.needsWriteCode('编写 SQL 语句查询成绩最高的学生姓名'), true);
+eq('写码：题干带代码围栏', XA_TOOLS.needsWriteCode('```python\nfor i in range(3):\n``` 补全上述代码'), true);
+eq('写码：理解类不误报（论述否决）', XA_TOOLS.needsWriteCode('谈谈你对面向对象程序设计的理解'), false);
+eq('写码：简述算法特征不误报', XA_TOOLS.needsWriteCode('简述算法的五个重要特征'), false);
+eq('写码：写出区别不误报', XA_TOOLS.needsWriteCode('请写出 TCP 与 UDP 的主要区别'), false);
+eq('写码：论述发展历史不误报', XA_TOOLS.needsWriteCode('论述计算机操作系统的发展历史'), false);
+eq('写码：空串安全', XA_TOOLS.needsWriteCode(''), false);
+
 // ===== extractRunBlock / stripRunBlocks =====
 eq('提取：标准 run 块', XA_TOOLS.extractRunBlock('分析如下：\n```run\nconsole.log(1+1)\n```\n最终答案 A'), 'console.log(1+1)\n');
 eq('提取：无换行紧贴代码', XA_TOOLS.extractRunBlock('```run var a=1; a*2```'), 'var a=1; a*2');

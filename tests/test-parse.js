@@ -2,8 +2,9 @@
 // 运行：node tests/test-parse.js
 const { loadSlice } = require('./harness');
 
-// qa.js 顶层需要 utils.js（qsa/qtext 等）。sites.js 提供解析函数（qa.js 无 DOM 引用需求）
-const { XIA_AI } = loadSlice(['utils.js', 'sites.js', 'qa.js'], ['XIA_AI']);
+// qa.js 顶层需要 utils.js（qsa/qtext 等）。sites.js 提供解析函数（qa.js 无 DOM 引用需求）。
+// tools.js 提供 XA_TOOLS：buildPrompt 主观题分支引用 needsWriteCode 判定
+const { XIA_AI } = loadSlice(['utils.js', 'sites.js', 'tools.js', 'qa.js'], ['XIA_AI']);
 const parseAnswer = XIA_AI.parseAnswer.bind(XIA_AI); // bind 保 this（内部调 this.matchByText）
 const matchByText = XIA_AI.matchByText.bind(XIA_AI);
 
@@ -52,6 +53,13 @@ eq('cloze single', parseAnswer('isinstance()', 'cloze'), 'isinstance()');
 eq('cloze numbered', parseAnswer('1. 甲\n2. 乙', 'cloze'), '甲|乙');
 eq('subjective passthrough', parseAnswer('论述正文……', 'subjective').slice(0, 4), '论述正文');
 
+// ===== 主观题代码围栏剥壳（代码题模型常无视「不要围栏」把整段答案包进 ```lang…```） =====
+eq('subjective fence strip matlab', parseAnswer('```matlab\nn = 1;\nwhile n <= 50\n```', 'subjective'), 'n = 1;\nwhile n <= 50');
+eq('subjective fence strip plain', parseAnswer('```\nx = 1\n```', 'subjective'), 'x = 1');
+eq('subjective fence strip crlf', parseAnswer('```python\r\nprint(1)\r\n```', 'subjective'), 'print(1)');
+eq('subjective fence unclosed keep', parseAnswer('```matlab\nn = 1', 'subjective').indexOf('```') >= 0, true); // 未闭合不动
+eq('subjective fence inline keep', parseAnswer('前文\n```py\nx=1\n```\n后文', 'subjective').indexOf('前文') >= 0, true); // 正文内嵌围栏不剥
+
 // ===== buildPrompt：判断题识别（选项带字母前缀 T.对/F.错 也得识别） =====
 const buildPrompt = XIA_AI.buildPrompt.bind(XIA_AI);
 const bpBool = buildPrompt('K线图的type值为sankey', [{ letter: 'A', text: 'T.对' }, { letter: 'B', text: 'F.错' }], 'single', '', 0, 0);
@@ -61,6 +69,12 @@ const bpSingle = buildPrompt('下面的概念与箱线图无关的是', opts4, '
 eq('prompt single negative hint', /否定式提问/.test(bpSingle), true);
 const bpMulti = buildPrompt('属于学说的是', opts4, 'multi', '', 0, 0);
 eq('prompt multi certainty hint', /错选不得分/.test(bpMulti), true);
+
+// ===== buildPrompt：主观题代码编写题走代码模板，论述题保持论述模板 =====
+const bpCode = buildPrompt('请用 MATLAB 编写脚本，使用 while 循环计算 1 到 50 之间所有偶数的和，并将结果输出到命令窗口。', [], 'subjective', '', 5, 0);
+eq('prompt subjective code template', /完整代码/.test(bpCode) && /不要用 Markdown 代码块围栏/.test(bpCode), true);
+eq('prompt subjective code no essay', /自然段/.test(bpCode), false);
+eq('prompt subjective essay kept', /自然段/.test(buildPrompt('谈谈大数据对社会治理的影响', [], 'subjective', '', 5, 0)), true);
 
 console.log(fail ? ('\n' + fail + ' FAILED / ' + (pass + fail)) : ('✅ ' + pass + '/' + (pass + fail) + ' parse tests passed'));
 process.exit(fail ? 1 : 0);

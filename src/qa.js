@@ -188,6 +188,17 @@ const XIA_AI = {
             && /^(错|不正确|错误|×)\s*$/.test(stripOpt(options[1].text));
         let base;
         if (type === 'subjective') {
+            // 代码编写题：答案应为完整代码而非论述文（否则模型把「编写脚本」答成议论文）
+            if (XA_TOOLS.needsWriteCode(question)) {
+                base = '你是编程助手。下面的题目要求编写代码，请直接给出完整代码作为答案。要求：\n'
+                    + '- 用题目指定的语言（如 MATLAB/Python/C/Java）写出完整代码，包含初始化、循环、输出等题目要求的全部部分，可直接运行\n'
+                    + '- 只输出代码本身，可在代码内加少量必要注释；禁止任何解释性文字、思路分析或开场白\n'
+                    + '- 不要用 Markdown 代码块围栏（```）包裹，直接输出代码文本，保持正常换行与缩进\n\n'
+                    + '题目：' + question;
+                return ctx
+                    ? '以下是检索到的相关资料（若与代码题无关可忽略）：\n' + ctx + '\n\n==========\n\n' + base
+                    : base;
+            }
             const words = targetWords(score);
             base = '你是考试答题助手。请回答下面的主观题' + (score > 0 ? '（' + score + '分）' : '') + '。要求：\n'
                 + '- 直接输出答案正文，禁止任何开场白、引言或「以下是回答」之类的废话\n'
@@ -303,7 +314,13 @@ const XIA_AI = {
         // 提取。未闭合的 <think>（输出被截断）剥后为空 → 走解析失败 strict 重试。
         const c = String(content || '').replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '').trim();
         if (!c) return null;
-        if (type === 'subjective') return c;
+        if (type === 'subjective') {
+            // 代码题模型常无视「不要围栏」要求把整段答案包进 ```lang…```；整条回复恰为一个
+            // 围栏块时剥壳留代码本体（论述文极少整体带围栏，误剥风险可忽略；未闭合/围栏内嵌
+            // 正文的回复不动，宁可留原样也不误吞内容）
+            const fence = c.match(/^```[a-zA-Z0-9_+#.-]*[ \t]*\r?\n([\s\S]*?)\r?\n?[ \t]*```$/);
+            return fence ? fence[1].trim() : c;
+        }
         if (type === 'cloze') {
             const lines = c.split(/\n+/).map(s => s.trim()).filter(Boolean);
             // 仅当多行且每行都带 1-2 位序号（1. / 2）/ （3、）），且剥后仍有非数字内容时才剥序号，
@@ -437,10 +454,14 @@ const XIA_AI = {
 
         // ===== 代码题本机沙箱工具循环（tools.js 的 runJs；检索增强在此模式不叠加——
         // 代码题的事实检索价值低，多一路外部依赖只增加延迟与噪声）=====
+        const wantCode = isSubjective && XA_TOOLS.needsWriteCode(q.question); // 主观题代码编写题：最终答案给代码
         if (XA_TOOLS.needsCodeTool(q.question)) {
             const mt = Math.max(maxTokens, 1200);           // 循环回复含代码与推理，客观题 16 token 上限不适用
             const tt = Math.max(timeout, 60000);            // 多轮工具轮次放宽超时
-            const finalFmt = type === 'subjective' ? '直接给出最终答案正文（纯文本，不要用代码块包裹）'
+            const finalFmt = type === 'subjective'
+                ? (wantCode
+                    ? '直接用题目要求的语言给出完整代码作为最终答案（不要用 JavaScript 替代、不要用代码块围栏包裹、不要输出任何解释性文字）'
+                    : '直接给出最终答案正文（纯文本，不要用代码块包裹）')
                 : '在最后单独一行按「' + (type === 'multi' ? '字母组合如 ABC' : type === 'cloze' ? '每空一行、只写答案' : '单个字母如 A') + '」格式给出最终答案';
             const proto = '\n\n==========\n你还可以使用「本机沙箱运行」工具验证推理（非 JS 代码先翻译成等价 JavaScript）：\n'
                 + '- 需要运行时，输出一个代码块，语言标记必须为 run：\n'
@@ -463,7 +484,7 @@ const XIA_AI = {
             };
             const step = left => {
                 XIA_AI.log('请求 ' + model + '（代码题工具轮，剩 ' + left + ' 次运行额度）', 'ai');
-                XIA_AI._llmChat(messages, { maxTokens: mt, timeout: tt, temperature: isSubjective ? 0.7 : 0.2 }, content => {
+                XIA_AI._llmChat(messages, { maxTokens: mt, timeout: tt, temperature: wantCode ? 0.2 : (isSubjective ? 0.7 : 0.2) }, content => {
                     if (!content) { onResult(null); return; }
                     const code = XA_TOOLS.extractRunBlock(content);
                     if (code && left > 0) {
@@ -511,7 +532,7 @@ const XIA_AI = {
                         + '）';
             }
             XIA_AI.log('请求 ' + model + (ctx ? '（含检索资料）' : '') + (strict ? '（格式重试）' : ''), 'ai');
-            XIA_AI._llmChat([{ role: 'user', content: prompt }], { maxTokens: maxTokens, timeout: timeout, temperature: isSubjective ? 0.7 : 0.3 }, content => {
+            XIA_AI._llmChat([{ role: 'user', content: prompt }], { maxTokens: maxTokens, timeout: timeout, temperature: isSubjective ? (wantCode ? 0.2 : 0.7) : 0.3 }, content => {
                 const answer = XIA_AI.parseAnswer(content, type, validLetters, q.options);
                 if (!answer) {
                     if (!strict && !isSubjective) { ask(ctx, true); return; } // 强调格式重试一次
@@ -631,8 +652,9 @@ const XIA_AI = {
             range.selectNodeContents(editor);
             sel.addRange(range);
 
-            // 按段落逐段插入，段间派发 insertParagraph（wangEditor 等富文本会响应 beforeinput）
-            const paras = String(answer).split(/\n+/).map(s => s.trim()).filter(Boolean);
+            // 按段落逐段插入，段间派发 insertParagraph（wangEditor 等富文本会响应 beforeinput）。
+            // 只去行尾空白、保留行首缩进：代码编写题的缩进是答案可读性的一部分
+            const paras = String(answer).split(/\n+/).map(s => s.replace(/\s+$/, '')).filter(Boolean);
             const normLen = () => (editor.textContent || '').replace(/\s+/g, '').length;
             const expected = paras.join('').replace(/\s+/g, '').length;
             const bi = (inputType, data) => {

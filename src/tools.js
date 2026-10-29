@@ -24,6 +24,23 @@ const XA_TOOLS = {
         return /(输出|打印|结果|返回值|运行|执行|计算|补全|填空|横线|空白处|错误|bug|调试|等于|是什么|什么)/.test(q);
     },
 
+    // 代码编写题判定（主观题要求「写代码/脚本/程序/函数」）：决定主观题答题风格——
+    // 答案应为可直接运行的完整代码而非论述文。与 needsCodeTool 互补：后者决定是否启用
+    // 沙箱工具循环，本判定只改写提示词。偏窄的代价是代码题被写成议论文（用户一眼可见
+    // 的错误），偏宽的代价是论述题误要求出代码——故带论述类动词否决兜底。
+    needsWriteCode(question) {
+        const q = String(question || '');
+        if (!q) return false;
+        if (/```/.test(q)) return true; // 题干带代码围栏：补全/续写类，答案必是代码
+        const langHit = /MATLAB|Python(?:\s*3)?|JavaScript|\bJava\b|C\+\+|C语言|C#|SQL|PHP|Go语言|Rust|Ruby|Swift|Kotlin|Scala|Perl|R语言|VBA|Fortran|汇编|伪代码|易语言/i.test(q);
+        const artifactHit = /代码|脚本|程序|函数|语句|算法|伪代码|命令窗口/.test(q);
+        const verbHit = /编写|写出|实现|设计|完成|给出|编制|生成/.test(q);
+        if (!(langHit && (artifactHit || verbHit)) && !(artifactHit && verbHit)) return false;
+        // 论述类动词否决（无具体语言名时）：「谈谈你对面向对象程序设计的理解」仍按议论文作答
+        if (!langHit && /谈谈|简述|论述|评述|赏析|的看法|的理解|心得|体会|认识/.test(q)) return false;
+        return true;
+    },
+
     // 提取响应中的 ```run 代码块（取第一个；协议约定一次只请求运行一块）
     extractRunBlock(text) {
         const m = String(text || '').match(/```run\s*([\s\S]*?)```/i);
