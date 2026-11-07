@@ -396,20 +396,21 @@ function installVideoHooks() {
 // 数据源：侧边栏目录（frontend-map 3.3 实证结构）。
 //   节数：.section-area 所在 li（排除锁定章 .disable-menu）；
 //   剩余时长：未完成节（inProgress/unStart 图标）的时长文本（mm:ss / h:mm:ss）求和，按 1x 播放估算。
-// 未展开章的节不在 DOM 里（计入会偏小），无法读到目录时整行隐藏；10s 缓存防每 tick 全量解析。
+// 未展开章的节不在 DOM 里（计入会偏小），无法读到目录时整行隐藏；13s 缓存防每次全量解析
+// （调用节奏 = mainTick 3s × tick%4 ≈ 12s 一次，缓存窗口必须盖过调用间隔，否则永不命中形同虚设）
 let _progCacheAt = 0, _progCacheText = '';
 function updateCourseProgress() {
     const el = document.getElementById('xa-course-progress');
     if (!el) return;
     const now = Date.now();
-    if (now - _progCacheAt < 10000) {
+    if (now - _progCacheAt < 13000) {
         if (_progCacheText) el.textContent = _progCacheText;
         return;
     }
     _progCacheAt = now;
     _progCacheText = '';
     const secs = qsa('.section-area').map(sa => sa.closest('li')).filter(li => li && !(li.closest && li.closest('.el-sub-menu.disable-menu')));
-    if (secs.length < 2) { el.style.display = 'none'; return; }
+    if (secs.length < 2) { el.style.display = 'none'; xaTitleSuffix(''); return; }
     let done = 0, remainSec = 0;
     for (const li of secs) {
         const complete = !!li.querySelector('.done-icon, .icon-done, .el-icon-check, .el-icon-circle-check, .el-icon-check-circle, .is-done');
@@ -430,9 +431,13 @@ function updateCourseProgress() {
     _progCacheText = text;
     el.textContent = text;
     el.style.display = '';
+    xaTitleSuffix(' · ' + done + '/' + secs.length + '节'); // 标签页标题同步进度，后台挂机时切窗可瞄
 }
 
 function mainTick() {
+    // 运行时段闸：时段外整体静默（不催播、不跳章、不看门狗——视频暂停在人走神/时段外属预期状态）。
+    // muteAll/keepPlay 照跑：静音是用户面板开关的事，防挂机伪装中断反而可能在恢复时暴露状态跳变。
+    if (!xaScheduleGate()) return;
     tick++;
     muteAll();
     keepPlay();

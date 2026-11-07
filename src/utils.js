@@ -186,46 +186,209 @@ function exactText(selector, text) {
     return hit;
 }
 
-// ==================== API Key 加密保存（可选）====================
-// GM 存储不再留明文密钥：口令经 PBKDF2(210k 迭代)派生 AES-GCM-256 密钥加密，盐/IV 每次随机，
-// 密文记录 {v,s,i,c} 落 GM 存储，明文同时清除。口令只存 sessionStorage 复用——页面脚本读得到
-// 口令，但读不到扩展 GM 存储里的密文，两者拼不到一起。
-// 边界如实说明：解密后的密钥必须驻留内存供请求使用，本方案防的是存储侧直接翻看与浏览器
-// 配置文件/同步泄露，防不了能读脚本内存或浏览器控制台的对手。crypto.subtle 需安全上下文（芯位为 https）。
-async function xaEncEncrypt(pass, text) {
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const key = await crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt: salt, iterations: 210000, hash: 'SHA-256' },
-        await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']),
-        { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
-    const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv }, key, new TextEncoder().encode(text));
-    const b64 = buf => btoa(String.fromCharCode.apply(null, new Uint8Array(buf)));
-    return { v: 1, s: b64(salt), i: b64(iv), c: b64(ct) };
+// ==================== 图片作答题：文本答案 → PNG → 平台上传控件 ====================
+// 题干要求「拍照/上传图片作答」时（sites.isImageAnswerQuestion），LLM 产出不了图片文件，
+// 但可以把文本答案渲染成 PNG，再走平台上传控件（input[type=file] + DataTransfer）交图。
+// 任一步环境受限（jsdom 无 canvas 2D、老浏览器无 DataTransfer/File 构造）即返回失败，
+// 由调用方回退人工跳过路径——绝不静默假装成功。
+
+// 纯文本排版：按最大列宽折行（CJK 逐字计 1、拉丁/数字计 0.55 的宽度估算），可独立测试。
+// 英文长单词在行尾硬切（渲染成照片场景可接受，不做逐词回退的复杂度）。
+function xaWrapTextLines(text, maxCols) {
+    const out = [];
+    for (const para of String(text || '').split(/\r?\n/)) {
+        if (!para.trim()) { out.push(''); continue; }
+        let line = '', width = 0;
+        for (const ch of para) {
+            const w = ch.charCodeAt(0) > 0x2e7f ? 1 : 0.55;
+            if (width + w > maxCols && line) { out.push(line); line = ''; width = 0; }
+            line += ch;
+            width += w;
+        }
+        if (line) out.push(line);
+    }
+    return out;
 }
 
-// 解密失败（口令错误/记录损坏）统一返回 null，由调用方给出提示
-async function xaEncDecrypt(pass, rec) {
+// canvas 渲染：白底黑字按行排版，高度按行数自适应（封顶 16000px，浏览器 canvas 上限内）。
+// cb(dataUrl|null)；dataURL 为 image/png（xaUploadAnswerPng 只认这个格式）。
+function xaRenderTextPng(text, cb) {
     try {
-        const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-        const key = await crypto.subtle.deriveKey(
-            { name: 'PBKDF2', salt: unb64(rec.s), iterations: 210000, hash: 'SHA-256' },
-            await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveKey']),
-            { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-        const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(rec.i) }, key, unb64(rec.c));
-        return new TextDecoder().decode(pt);
-    } catch (e) { return null; }
+        const lines = xaWrapTextLines(String(text || '').slice(0, 6000), 46);
+        const canvas = document.createElement('canvas');
+        if (!canvas.getContext || !canvas.toBlob) { cb(null); return; }
+        const W = 1040, PAD = 48, LH = 34;
+        canvas.width = W;
+        canvas.height = Math.min(PAD * 2 + lines.length * LH + 20, 16000);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { cb(null); return; }
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, W, canvas.height);
+        ctx.fillStyle = '#111111';
+        ctx.font = '22px "Microsoft YaHei", "PingFang SC", sans-serif';
+        ctx.textBaseline = 'top';
+        lines.forEach((ln, i) => ctx.fillText(ln, PAD, PAD + i * LH));
+        canvas.toBlob(blob => {
+            if (!blob) { cb(null); return; }
+            const reader = new FileReader();
+            reader.onload = () => cb(String(reader.result || '') || null);
+            reader.onerror = () => cb(null);
+            reader.readAsDataURL(blob);
+        }, 'image/png');
+    } catch (e) { cb(null); }
 }
 
-// 本机设备密钥（自动加密模式）：首次调用随机生成 32 字节并存 GM，此后稳定复用。
-// 安全边界：与密文同存一处——防的是存储被随手翻看/明文被一眼复制走；
-// 防不了定向的整配置文件窃取（设备密钥跟着密文一起被拿走），那需要口令模式。
-function xaDevKey() {
-    let k = '';
-    try { k = String(GM_getValue(SK.devKey, '') || ''); } catch (e) {}
-    if (k) return k;
-    const raw = crypto.getRandomValues(new Uint8Array(32));
-    k = btoa(String.fromCharCode.apply(null, raw));
-    try { GM_setValue(SK.devKey, k); } catch (e) {}
-    return k;
+// 把 PNG dataURL 塞进题目块的文件上传控件并触发 change（Element Plus el-upload 原生监听
+// 其隐藏 input 的 change）。返回 true=已派发（平台是否真正收件由上传回显校验确认），
+// false=找不到控件/构造受限（DataTransfer 被禁等），调用方回退人工。
+function xaUploadAnswerPng(scope, dataUrl) {
+    try {
+        const box = (scope && scope.closest && scope.closest('.question-box')) || scope || document;
+        let inputs = qsa('input[type="file"]', box);
+        if (!inputs.length) {
+            // 兜底全页：仅当全页恰好只有一个文件控件时才取——多题同屏（答题卡式卷面）时
+            // 抓「第一个」很可能投到别的题里，宁可失败回人工也不传错位置
+            const all = qsa('input[type="file"]');
+            if (all.length === 1) inputs = all;
+        }
+        if (!inputs.length) return false;
+        const input = inputs.find(i => /image/i.test(String(i.accept || ''))) || inputs[0];
+        const bin = atob(String(dataUrl).split(',')[1] || '');
+        const arr = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+        const dt = new DataTransfer();
+        dt.items.add(new File([arr], 'answer.png', { type: 'image/png' }));
+        input.files = dt.files;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+    } catch (e) { return false; }
+}
+
+// ==================== 桌面通知（无人值守事件提醒）====================
+// 页面在后台（用户看不到面板/日志）时才弹系统通知，前台一律不打扰；同类事件默认 10 分钟
+// 节流防骚扰（巡航列表页每分钟都会刷一次「暂无作业」日志）。纯本地能力，无网络外发。
+
+// 真实可见性判定：keepPlay 反挂机伪装把 document.hidden / visibilityState / hasFocus
+// 全部劫持成「恒可见」，实例上的 defineProperty 只遮蔽不覆盖——Document.prototype 上的
+// 原生 getter 仍在。从原型取真值才能知道用户是否真的在看这个页面。
+// 原型 getter 不可用（极端环境）时按后台处理：宁多提醒不漏提醒。
+function xaPageInBackground() {
+    try {
+        const d = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden');
+        if (d && d.get) return !!d.get.call(document);
+    } catch (e) {}
+    return true;
+}
+
+// type：节流键（cfg/manual/cruise/submit/risk/deadline）；gapMs：同类最小间隔（默认 10 分钟）。
+// GM_notification 不可用（未授权/老扩展）时静默跳过——通知是锦上添花，绝不影响主流程。
+const _xaNotifyAt = {};
+function xaNotify(type, title, body, gapMs) {
+    try {
+        if (conf && conf.notify === false) return;
+        if (!xaPageInBackground()) return;
+        const now = Date.now();
+        if (now - (_xaNotifyAt[type] || 0) < (gapMs || 600000)) return;
+        _xaNotifyAt[type] = now;
+        if (typeof GM_notification !== 'function') return;
+        GM_notification({
+            title: '芯位 · ' + title,
+            text: String(body || '').slice(0, 200),
+            onclick: () => { try { window.focus(); } catch (e) {} },
+        });
+    } catch (e) {}
+}
+
+// token 用量缩写（面板统计展示）：940 → '940'，1200 → '1.2k'，15300 → '15.3k'
+function xaFmtTok(n) {
+    n = Number(n) || 0;
+    return n >= 1000 ? (Math.round(n / 100) / 10) + 'k' : String(n);
+}
+
+// 标签页标题附加进度后缀：后台挂机时切到别的窗口也能瞄到课程进度。
+// SPA 路由会改写 document.title——每次先剥掉上次自己加的后缀再拼新的，防后缀叠加；
+// suffix 传空串即还原原标题。
+let _xaTitleSuffix = '';
+function xaTitleSuffix(suffix) {
+    try {
+        suffix = String(suffix || '');
+        if (_xaTitleSuffix && document.title.endsWith(_xaTitleSuffix)) {
+            document.title = document.title.slice(0, document.title.length - _xaTitleSuffix.length);
+        }
+        _xaTitleSuffix = suffix;
+        if (suffix && document.title) document.title += suffix;
+    } catch (e) {}
+}
+
+// ==================== 运行时段表（自动功能的执行时间窗）====================
+
+// 解析 "HH:MM-HH:MM"（也容忍 ~ 分隔与单位数小时）：返回 [起始分钟, 结束分钟]；
+// 格式/取值非法（25:00、12:7x 等）返回 null——由调用方决定按全天放行（配错不能锁死自动化）。
+function xaParseScheduleRange(s) {
+    const m = String(s || '').trim().match(/^(\d{1,2}):(\d{2})\s*[-~]\s*(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const h1 = +m[1], m1 = +m[2], h2 = +m[3], m2 = +m[4];
+    if (h1 > 23 || h2 > 23 || m1 > 59 || m2 > 59) return null;
+    return [h1 * 60 + m1, h2 * 60 + m2];
+}
+
+// 当前时刻是否在允许时段内（空配置=全天；起止相同视为全天；支持跨零点如 23:00-07:00）。
+// nowMin 参数仅供测试注入，运行期不传走真实时钟。
+function xaScheduleActive(nowMin) {
+    const r = xaParseScheduleRange(conf && conf.schedule);
+    if (!r) return true;
+    const cur = nowMin != null ? nowMin : new Date().getHours() * 60 + new Date().getMinutes();
+    if (r[0] === r[1]) return true;
+    return r[0] < r[1] ? (cur >= r[0] && cur < r[1]) : (cur >= r[0] || cur < r[1]);
+}
+
+// 时段闸门：自动流程（scan / 挂机主循环）每轮调用，跨过时段边界时打一条日志。
+// 手动操作（答题/巡航按钮）不设闸——用户亲手点的，不该被时段拦。nowMin 仅供测试注入。
+let _xaScheduleWasActive = true;
+function xaScheduleGate(nowMin) {
+    const active = xaScheduleActive(nowMin);
+    if (active !== _xaScheduleWasActive) {
+        _xaScheduleWasActive = active;
+        XIA_AI.log(active
+            ? '▶ 已进入运行时段，自动刷课/答题恢复'
+            : '⏸ 已到暂停时段（' + (conf.schedule || '') + '），自动刷课/答题暂停，手动操作不受影响',
+            active ? 'ok' : 'info');
+    }
+    return active;
+}
+
+// ==================== 题干图片拉取（视觉模型答题用）====================
+
+// 图片 URL → dataURL：GM_xmlhttpRequest 拉字节（带浏览器 Cookie，过平台 CDN 鉴权/防盗链），
+// FileReader 转 base64 dataURL。魔数嗅探 MIME；>6MB 或拉取失败返回 ''（调用方按无图处理）。
+// 本身已是 dataURL 的原样放行。cb(dataURL|'')。
+function xaFetchImageDataURL(src, cb) {
+    const done = v => { try { cb(String(v || '')); } catch (e) {} };
+    src = String(src || '');
+    if (/^data:image\//i.test(src)) return done(src);
+    try {
+        GM_xmlhttpRequest({
+            method: 'GET', url: src, timeout: 10000, responseType: 'arraybuffer',
+            headers: { 'Accept': 'image/avif,image/webp,image/png,image/jpeg,*/*' },
+            onload: r => {
+                try {
+                    const buf = r.response;
+                    if (!buf || !buf.byteLength || buf.byteLength > 6 * 1024 * 1024) return done('');
+                    const u8 = new Uint8Array(buf);
+                    let mime = 'image/jpeg'; // 认不出的兜底：多数 vision 端点会自行嗅探真实格式
+                    if (u8[0] === 0x89 && u8[1] === 0x50) mime = 'image/png';
+                    else if (u8[0] === 0xFF && u8[1] === 0xD8) mime = 'image/jpeg';
+                    else if (u8[0] === 0x47 && u8[1] === 0x49) mime = 'image/gif';
+                    else if (u8[8] === 0x57 && u8[9] === 0x45 && u8[10] === 0x42) mime = 'image/webp';
+                    const fr = new FileReader();
+                    fr.onload = () => done(fr.result);
+                    fr.onerror = () => done('');
+                    fr.readAsDataURL(new Blob([buf], { type: mime }));
+                } catch (e) { done(''); }
+            },
+            onerror: () => done(''),
+            ontimeout: () => done(''),
+        });
+    } catch (e) { done(''); }
 }

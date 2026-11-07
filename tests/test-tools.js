@@ -64,5 +64,22 @@ eq('格式化：空对象安全', XA_TOOLS.formatRunResult(null).indexOf('（无
     eq('软封锁：WebSocket 拦截', !!got && /网络访问被禁用/.test(got.error), true);
 }
 
+// ===== needsSearch：技术概念题门控（77分复盘：前端判断题裸答丢分，检索文档佐证）=====
+eq('检索：HTML 标签题', XA_TOOLS.needsSearch('<body>标签和<head>标签是并列关系。（ ）'), true);
+eq('检索：CSS 选择器题', XA_TOOLS.needsSearch('CSS3中，子代选择器主要用来选择某个元素的子元素。'), true);
+eq('检索：属性值题', XA_TOOLS.needsSearch('下列选项中，可用于设置元素字体大小的属性是'), true);
+eq('检索：伪类题', XA_TOOLS.needsSearch('使用链接伪类时，通常按照a:link、a:visited、a:hover和a:active的顺序书写'), true);
+eq('检索：JavaScript 关键词', XA_TOOLS.needsSearch('JavaScript 中 var 与 let 的区别'), true);
+eq('检索：外边距术语', XA_TOOLS.needsSearch('盒模型中 margin 表示外边距'), true);
+eq('检索：历史题仍命中（原逻辑不回退）', XA_TOOLS.needsSearch('秦始皇统一六国是在哪一年？'), true); // 「哪一年」原分支，仅核对不回退
+eq('检索：时事题仍命中', XA_TOOLS.needsSearch('2026 年世界杯在哪国举办？'), true);
+eq('检索：纯中文生活题不命中', XA_TOOLS.needsSearch('今天中午吃什么好呢'), false);
+// ===== 过往错题补充：D3/MATLAB/思政课检索门控 =====
+eq('检索：D3 裸 API 题', XA_TOOLS.needsSearch('在D3中，如何选择页面上的第一个匹配元素'), true);
+eq('检索：D3 标签属性题', XA_TOOLS.needsSearch('使用D3绘制图表时，用于配置标签属性的函数是'), true);
+eq('检索：MATLAB 函数题', XA_TOOLS.needsSearch('MATLAB 中判断变量A是否为空的函数是'), true);
+eq('检索：国土安全思政题', XA_TOOLS.needsSearch('新时代维护国土安全的主要途径？'), true);
+eq('检索：国家安全宣传题', XA_TOOLS.needsSearch('大学生作为"国家安全宣传员"，核心责任是'), true);
+
 console.log(fail ? ('\n' + fail + ' FAILED / ' + (pass + fail)) : ('✅ ' + pass + '/' + (pass + fail) + ' tools tests passed'));
 process.exit(fail ? 1 : 0);

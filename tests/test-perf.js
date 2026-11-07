@@ -44,7 +44,10 @@ eq('MutationObserver 静音批次合并', /pending = false; muteAll\(\)/.test(ut
 
 // ===== 架构拆分断言（防回退到单文件上帝模块）=====
 const sitesSrc = readModules(['sites.js']);
+const cruiseSrc = readModules(['cruise.js']);
 eq('sites.js 含题目解析', /function parseQuestionRoot/.test(sitesSrc), true);
+eq('cruise.js 承载作业巡航三件套', /function homeworkWalker/.test(cruiseSrc) && /function runAutoSubmit/.test(cruiseSrc) && /function runCruise/.test(cruiseSrc), true);
+eq('qa.js 不再内联巡航实现', /function homeworkWalker|function runAutoSubmit/.test(qaSrc), false);
 eq('bootstrap 版本为注入占位符', /__XA_VERSION__/.test(bootSrc), true);
 eq('题库功能已移除（防复活残留）', /XIA_TIKU|xaTikuTrackType|tikuEnabled/.test(qaSrc + sitesSrc), false);
 eq('harvest.js 文件已删除', !fs.existsSync(require('path').join(__dirname, '..', 'src', 'harvest.js')), true);

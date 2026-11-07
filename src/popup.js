@@ -7,30 +7,36 @@
 // 后者不能靠前者命中（「刷新后」不是「刷新页面后」的子串），必须单列。
 //
 // 性能：快/慢双路径。快路径每 3s 只看可见弹窗/浮层节点（风控文案走 el-message-box，
-// ④ 这类进度提示走 el-message toast，无弹窗零成本）；
-// 全页 innerText 会强制样式重算+重排，降为 20s 一次的兜底扫描（弹窗实现变化时仍能捕获）。
+// ④ 这类进度提示走 el-message toast，无弹窗零成本）；全页 innerText 会强制样式重算+重排，
+// 慢路径再分两档降频——屏上有「疑似浮层但未命中已知文案」时 20s 一次升格全页扫；
+// 干净页面 60s 一次无条件扫（未知实现的新文案兜底，最坏比原来晚 40s 发现）。
 
 function initPopupAutoReload() {
     const RELOAD_COOLDOWN = 20000; // 20s 冷却，防止刷新死循环
     const HINTS = ['学习状态异常', '学习进度同步延迟', '请刷新后继续学习', '请刷新页面后继续学习', '不允许倍速播放', '播放位置不合法'];
     const matchHit = t => HINTS.find(h => t.indexOf(h) !== -1);
-    let slowAt = 0;
+    let slowAt = 0, slowSweeps = 0;
     const trigger = hit => {
         GM_setValue(SK.lastReload, Date.now());
         console.log('[芯位] 检测到平台风控弹窗（' + hit + '），3秒后自动刷新页面');
+        xaNotify('risk', '检测到平台风控提示', '「' + hit + '」，3 秒后自动刷新页面续跑'); // 通知与页面刷新互不影响（系统级）
         setTimeout(() => { location.reload(); }, 3000);
     };
     setInterval(() => {
         const last = Number(GM_getValue(SK.lastReload, 0));
         if (Date.now() - last < RELOAD_COOLDOWN) return;
-        // 快路径：可见弹窗/浮层的局部文本（只对已打开的少数节点读 innerText）
+        // 快路径：可见弹窗/浮层的局部文本（只对已打开的少数节点读 innerText）；
+        // 顺带记录「有疑似浮层但没命中已知文案」——慢路径据此升格全页扫
+        let suspicious = false;
         for (const d of qsa('.el-message-box, .el-message, .el-dialog, [role="dialog"]')) {
             if (!visible(d)) continue;
             const hit = matchHit(d.innerText || d.textContent || '');
             if (hit) { trigger(hit); return; }
+            suspicious = true;
         }
-        // 慢路径：20s 一次全页兜底
-        if (Date.now() - slowAt > 20000) {
+        // 慢路径：全页兜底（未知实现的文案仍能捕获）。两档降频：
+        // 疑似浮层在场 → 20s 一次；干净页面 → 60s 一次无条件扫（slowSweeps 计数）
+        if (Date.now() - slowAt > 20000 && (suspicious || ++slowSweeps % 3 === 1)) {
             slowAt = Date.now();
             const hit = matchHit((document.body && document.body.innerText) || '');
             if (hit) trigger(hit);
@@ -97,6 +103,7 @@ function markerQuestionTick() {
             _mqState = '';
             _mqFails[key] = (_mqFails[key] || 0) + 1;
             XIA_AI.log(_mqFails[key] >= 2 ? '弹题连续作答失败，留人工处理（视频将保持暂停）' : '弹题未取得答案，稍后重试', 'error');
+            if (_mqFails[key] >= 2) xaNotify('manual', '视频弹题待人工', '弹题连续作答失败，视频保持暂停，请人工处理');
             return;
         }
         // 回填：按字母命中 .option-item（option-content 前缀），原生 input click 驱动 Vue v-model

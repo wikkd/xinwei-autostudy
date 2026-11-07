@@ -11,13 +11,14 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_notification
+// @grant        GM_registerMenuCommand
+// @grant        GM_unregisterMenuCommand
 // @connect      *
 // @connect      api.deepseek.com
 // @connect      api.siliconflow.cn
 // @connect      api.openai.com
 // @connect      cn.bing.com
-// @connect      html.duckduckgo.com
-// @connect      api.tavily.com
 // @license      MIT
 // @run-at       document-idle
 // ==/UserScript==

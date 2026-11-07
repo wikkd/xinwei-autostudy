@@ -40,7 +40,11 @@ const store = {};
 window.GM_getValue = (k, d) => (k in store ? store[k] : d);
 window.GM_setValue = (k, v) => { store[k] = String(v); };
 window.GM_xmlhttpRequest = () => {};
-const FILES = ['config.js', 'utils.js', 'sites.js', 'tools.js', 'qa.js', 'popup.js'];
+// 文件清单从 build.js 的 BODY_ORDER 派生（单一来源，src 新增/删减自动跟上）；
+// ui/autoplay/deadline/bootstrap 依赖真实播放器与常驻定时器，不在本测试范围
+const { BODY_ORDER } = require('../build');
+const QA_TEST_SKIP = ['ui.js', 'autoplay.js', 'deadline.js', 'bootstrap.js'];
+const FILES = BODY_ORDER.filter(f => QA_TEST_SKIP.indexOf(f) < 0);
 window.eval(FILES.map(f => fs.readFileSync(path.join(SRC, f), 'utf8')).join('\n') + `
 ;window.__T = {
     get conf() { return conf; },
@@ -49,6 +53,16 @@ window.eval(FILES.map(f => fs.readFileSync(path.join(SRC, f), 'utf8')).join('\n'
     markerTick: markerQuestionTick,
     imageQ: isImageAnswerQuestion,
     resetMarker: () => { _mqKey = ''; _mqState = ''; _mqFails = {}; },
+    notify: xaNotify,
+    notifyReset: () => { for (const k in _xaNotifyAt) delete _xaNotifyAt[k]; },
+    setBg: v => { xaPageInBackground = v; },
+    realBg: xaPageInBackground, // 先捕获原生判定，测试后还原
+    courseCtx: pageCourseContext,
+    schedParse: xaParseScheduleRange,
+    schedActive: nowMin => xaScheduleActive(nowMin),
+    schedGate: nowMin => xaScheduleGate(nowMin),
+    schedGateReset: () => { _xaScheduleWasActive = true; },
+    qImages: questionImages,
 };`);
 window.loadCfg(); // 必须在解构前：loadCfg 会整体重赋值 conf，之后 getter 才返回最终对象
 const { conf, ai: XIA_AI, tools: XA_TOOLS, markerTick, resetMarker } = window.__T;
@@ -83,10 +97,10 @@ function resetAI(confirmMode) {
         lastQuestionHash: '', answering: false, answeringOnce: false,
         _failHash: '', _failCount: 0, _skipHash: '', _skipCount: 0,
         _submitting: false, _lastSubmitTry: 0, _donePage: '', _nextAnswerAt: 0, _cfgError: null,
-        _lastNav: 0, _imgLogged: '', _answerMemo: {},
+        _lastNav: 0, _imgLogged: '', _imgBusyHash: '', _answerMemo: {},
     });
     XIA_AI.callAI = _realCallAI;
-    XIA_AI.stats = { answered: 0, submitted: 0, failed: 0 };
+    XIA_AI.stats = { answered: 0, submitted: 0, failed: 0, tokensIn: 0, tokensOut: 0 };
     resetMarker(); // 弹题状态机（popup.js 模块级 let，须经闭包复位）
     conf.autoAnswer = true;
     conf.autoSubmit = false;
@@ -334,17 +348,34 @@ function subjectiveFixture(opts) {
     XIA_AI.scan();
     eq('图片回归：普通主观题进入 AI 作答', asked, 1);
 
-    // ⑦ scan 集成：题干要求上传图片 → 不调 AI，记录跳过
+    // ⑦ scan 集成：题干要求上传图片 → 首遇尝试「AI 文本答案→渲染成图→自动上传」（callAI 被调用）
     resetAI(false);
     delete store['xa_img_skipped'];
     subjectiveFixture({ editor: true, toolbar: true, stem: '请上传手写图片作为本题答案。' });
     let called = 0, nextClicked = 0;
-    XIA_AI.callAI = () => { called++; };
+    XIA_AI.callAI = () => { called++; }; // 桩不回调：流程停在 AI 阶段（渲染/上传不在本测内）
     window.document.querySelector('.toggle-button').addEventListener('click', () => nextClicked++);
     XIA_AI.scan();
-    eq('图片回归：真题不调用 AI', called, 0);
-    eq('图片回归：真题提示人工并跳过', window.document.getElementById('xa-progress').textContent.indexOf('🖼️'), 0);
-    eq('图片回归：真题尝试跳下一题', nextClicked, 1);
+    eq('图片回归：真题首遇尝试 AI 自动作答', called, 1);
+    eq('图片回归：首遇不直接跳过', nextClicked, 0);
+
+    // ⑧ AI 无答案 → 回退人工跳过并落 GM 记录；同题重扫不再调 AI（记录命中直达跳过路径）
+    resetAI(false);
+    delete store['xa_img_skipped'];
+    subjectiveFixture({ editor: true, toolbar: true, stem: '请上传手写图片作为本题答案。' });
+    called = 0; nextClicked = 0;
+    XIA_AI.callAI = (q, cb) => { called++; cb(null); };
+    window.document.querySelector('.toggle-button').addEventListener('click', () => nextClicked++);
+    XIA_AI.scan();
+    eq('图片回归：AI 失败回退跳过记录', called, 1);
+    eq('图片回归：回退时提示人工', window.document.getElementById('xa-progress').textContent.indexOf('🖼️'), 0);
+    eq('图片回归：回退时尝试跳下一题', nextClicked, 1);
+    XIA_AI.lastQuestionHash = ''; // 人工未处理，模拟下一轮重扫（跳过记录已落 GM）
+    XIA_AI.callAI = () => { called++; };
+    XIA_AI.scan();
+    eq('图片回归：已跳过的真题不再调 AI', called, 1);
+    eq('图片回归：已跳过的真题仍提示人工', window.document.getElementById('xa-progress').textContent.indexOf('🖼️'), 0);
+    eq('图片回归：已跳过的真题不重复跳题（2.5s 节流）', nextClicked, 1);
 }
 
 {
@@ -359,40 +390,28 @@ function subjectiveFixture(opts) {
     eq('图片记录：旧记录被清理', saved.some(x => !x.v), false);
 }
 
-// ===== ⑨ 检索链路回归（v3.15.1）：DDG 失败必须落到 Bing 且 done 一定被调用 =====
-// 旧版在对象方法里裸调用 searchBing → ReferenceError，done 回调永不触发，答题流程整体卡死
+// ===== ⑨ 检索链路回归（v3.15.1 起步；检索源收敛单 Bing 后简化）：done 必须被调用不卡死 =====
+// 旧版曾在对象方法里裸调用 searchBing → ReferenceError，done 永不触发，答题流程整体卡死
+// （Tavily/DDG 通道已移除，原「DDG 超时回退 Bing」用例随之失去对象）
 {
     resetAI(false);
-    conf.searchProvider = 'duckduckgo';
     let calls = [];
     window.GM_xmlhttpRequest = opts => { calls.push(opts); };
     let got = 'HANG';
     XIA_AI.searchWeb('测试检索词', ctx => { got = ctx; });
-    // 第一次（DDG）超时 → 自动重试 Bing；第二次（Bing）返回正常结果块
-    const bingCtx = '<li class="b_algo" data-a="1"><h2><a>标题一</a></h2><p>V2 是火箭的内容服务正文摘要，足够长起码十个汉字以上。</p></li>'
-        + '<li class="b_algo"><h2><a>标题二</a></h2><p>第二条结果的摘要内容。</p></li>';
-    if (calls.length !== 1) eq('检索回归：先请求 DDG 仅 1 次', calls.length, 1);
-    if (calls.length === 1) {
-        eq('检索回归：DDG 地址正确', calls[0].url.indexOf('html.duckduckgo.com'), 8);
-        calls[0].ontimeout(); // DDG 超时 → 应触发 Bing 重试而不是卡死
-        eq('检索回归：超时后补发 Bing 请求', calls.length, 2);
-        eq('检索回归：回退到 cn.bing.com', calls[1].url.indexOf('cn.bing.com/search?q='), 8);
-        calls[1].onload({ responseText: bingCtx });
-    }
-    ok('检索回归：DDG 超时回退 Bing 且不再卡死', typeof got === 'string' && got.indexOf('标题一') >= 0 && got.indexOf('第二条结果') >= 0);
-}
-{
-    // provider=bing 默认链路：直接命中 searchBing，结果解析出标题+摘要
-    resetAI(false);
-    conf.searchProvider = 'bing';
-    let calls = [];
-    window.GM_xmlhttpRequest = opts => { calls.push(opts); };
-    let got = 'HANG';
-    XIA_AI.searchWeb('测试检索词', ctx => { got = ctx; });
-    eq('检索回归：bing 直连仅 1 次请求', calls.length, 1);
-    eq('检索回归：bing 地址正确', calls[0].url.indexOf('cn.bing.com/search?q='), 8);
+    eq('检索回归：仅 1 次请求', calls.length, 1);
+    eq('检索回归：cn.bing.com 直连', calls[0].url.indexOf('cn.bing.com/search?q='), 8);
     calls[0].onload({ responseText: 'junk-prefix placeholder\n<li class="b_algo" x="y"><div>仅有的十个汉字以上长度的合法结果内容摘要</div></li>' });
-    ok('检索回归：bing 解析非空且回调触发', typeof got === 'string' && got.indexOf('合法结果') >= 0);
+    ok('检索回归：解析非空且回调触发', typeof got === 'string' && got.indexOf('合法结果') >= 0);
+    // 失败路径也必须回调空串（跳过检索直接作答），不允许挂起
+    got = 'HANG'; calls = [];
+    XIA_AI.searchWeb('第二题', ctx => { got = ctx; });
+    calls[0].ontimeout();
+    ok('检索回归：超时回调空串不卡死', got === '');
+    got = 'HANG'; calls = [];
+    XIA_AI.searchWeb('第三题', ctx => { got = ctx; });
+    calls[0].onerror();
+    ok('检索回归：网络错误回调空串不卡死', got === '');
 }
 
 // ===== ⑩ 会话内同题缓存（v3.16）：重进同题免二次 LLM 请求，直接复用答案 =====
@@ -477,6 +496,290 @@ function codeChoiceFixture(id) {
     eq('代码题上限：沙箱只运行 3 次', runs.length, 3);
     eq('代码题上限：第 4 次请求被格式纠正收尾', reqs.length, 5);
     eq('代码题上限：最终答案仍正常回填', fx.inputs[1].checked, true);
+}
+
+// ===== ⑭ LLM 传输降级链：5xx/空内容 → 第二发（官方命名降 deepseek-chat）；401 熔断不降级；usage 累计 =====
+{
+    resetAI(false);
+    conf.apiKey = 'sk-test'; conf.model = 'deepseek-reasoner'; conf.apiBase = 'https://api.deepseek.com';
+    const calls = [];
+    window.GM_xmlhttpRequest = opts => { calls.push(opts); };
+    let got = 'unset';
+    XIA_AI._llmChat([{ role: 'user', content: 'q' }], { maxTokens: 100, timeout: 1000 }, c => { got = c; });
+    eq('降级链：第 1 发用配置模型', JSON.parse(calls[0].data).model, 'deepseek-reasoner');
+    calls[0].onload({ status: 500, responseText: 'upstream error' });
+    eq('降级链：5xx 触发第 2 发', calls.length, 2);
+    eq('降级链：官方端点降级 deepseek-chat', JSON.parse(calls[1].data).model, 'deepseek-chat');
+    calls[1].onload({ status: 200, responseText: JSON.stringify({ choices: [{ message: { content: 'A' } }], usage: { prompt_tokens: 1234, completion_tokens: 940 } }) });
+    eq('降级链：降级后拿到内容', got, 'A');
+    eq('token 统计：输入累计', XIA_AI.stats.tokensIn, 1234);
+    eq('token 统计：输出累计', XIA_AI.stats.tokensOut, 940);
+
+    // 空内容也走降级（reasoner 思考吃光 max_tokens 的典型场景，chat 模型能真正出 content）
+    resetAI(false);
+    conf.apiKey = 'sk-test'; conf.model = 'deepseek-reasoner'; conf.apiBase = 'https://api.deepseek.com';
+    const calls2 = [];
+    window.GM_xmlhttpRequest = opts => calls2.push(opts);
+    XIA_AI._llmChat([{ role: 'user', content: 'q' }], { maxTokens: 100, timeout: 1000 }, () => {});
+    calls2[0].onload({ status: 200, responseText: JSON.stringify({ choices: [{ message: { content: '' } }] }) });
+    eq('降级链：空内容触发降级', calls2.length, 2);
+
+    // 自定义网关（非官方命名）不猜第三方模型名：同模型重试一次
+    resetAI(false);
+    conf.apiKey = 'sk-test'; conf.model = 'deepseek-ai/DeepSeek-R1'; conf.apiBase = 'https://api.siliconflow.cn';
+    const calls3 = [];
+    window.GM_xmlhttpRequest = opts => calls3.push(opts);
+    XIA_AI._llmChat([{ role: 'user', content: 'q' }], { maxTokens: 100, timeout: 1000 }, () => {});
+    calls3[0].onload({ status: 503, responseText: '' });
+    eq('降级链：自定义网关同模型重试', JSON.parse(calls3[1].data).model, 'deepseek-ai/DeepSeek-R1');
+
+    // 401 配置错误：熔断且不降级（重试坏配置无意义）
+    resetAI(false);
+    conf.apiKey = 'sk-bad'; conf.model = 'deepseek-reasoner'; conf.apiBase = 'https://api.deepseek.com';
+    const calls4 = [];
+    window.GM_xmlhttpRequest = opts => calls4.push(opts);
+    let nulled = false;
+    XIA_AI._llmChat([{ role: 'user', content: 'q' }], { maxTokens: 100, timeout: 1000 }, c => { nulled = c === null; });
+    calls4[0].onload({ status: 401, responseText: '{"error":"auth"}' });
+    eq('降级链：401 不降级', calls4.length, 1);
+    ok('降级链：401 熔断置位', !!XIA_AI._cfgError);
+    ok('降级链：401 回调 null', nulled);
+
+    // token 统计展示（#xa-stats 缩写）
+    XIA_AI.stats.tokensIn = 1234; XIA_AI.stats.tokensOut = 940;
+    XIA_AI.bump();
+    const statTxt = (window.document.getElementById('xa-stats') || {}).textContent || '';
+    ok('token 统计：面板含 1.2k 缩写', statTxt.indexOf('1.2k') >= 0);
+    ok('token 统计：面板含 940 原值', statTxt.indexOf('940') >= 0);
+    window.GM_xmlhttpRequest = () => {}; // 还原全局桩，避免影响后续用例
+}
+
+// ===== ⑮ 桌面通知：后台才弹、同类节流、异类互不干扰、前台不打扰、面板开关 =====
+{
+    resetAI(false);
+    const notes = [];
+    window.GM_notification = d => notes.push(d);
+    window.__T.notifyReset();
+    window.__T.setBg(() => true); // 强制后台（jsdom 页面默认「可见」）
+    conf.notify = true;
+    window.__T.notify('t1', '标题A', '正文');
+    eq('通知：后台首次弹出', notes.length, 1);
+    ok('通知：标题带前缀', notes[0].title.indexOf('芯位') >= 0 && notes[0].title.indexOf('标题A') >= 0);
+    window.__T.notify('t1', '标题A', '正文');
+    eq('通知：同类默认 10 分钟节流', notes.length, 1);
+    window.__T.notify('t2', '标题B', '正文');
+    eq('通知：异类不互斥', notes.length, 2);
+    // 前台（可见）：面板/日志已可见，永不打扰
+    window.__T.notifyReset();
+    window.__T.setBg(() => false);
+    window.__T.notify('t3', '标题C', '正文');
+    eq('通知：前台不弹', notes.length, 2);
+    // 面板开关关闭：后台也不弹
+    window.__T.setBg(() => true);
+    conf.notify = false;
+    window.__T.notify('t4', '标题D', '正文');
+    eq('通知：开关关闭不弹', notes.length, 2);
+    // 还原环境
+    conf.notify = true;
+    window.__T.setBg(window.__T.realBg);
+    window.__T.notifyReset();
+}
+
+// ===== ⑯ 标题栏进度后缀：SPA 改写标题安全（先剥旧后缀再拼新，不叠加） =====
+{
+    window.document.title = '课程学习';
+    window.eval('xaTitleSuffix(" · 3/20节");');
+    eq('标题：附加后缀', window.document.title, '课程学习 · 3/20节');
+    window.eval('document.title = "新路由标题"; xaTitleSuffix(" · 4/20节");');
+    eq('标题：SPA 改写后重建不叠加', window.document.title, '新路由标题 · 4/20节');
+    window.eval('xaTitleSuffix("");');
+    eq('标题：空后缀还原原标题', window.document.title, '新路由标题');
+}
+
+// ===== ⑰ xaPageInBackground 防伪装契约：keepPlay 式实例劫持骗不过原型读取（通知功能根基） =====
+{
+    const protoDesc = Object.getOwnPropertyDescriptor(window.Document.prototype, 'hidden');
+    ok('背景判定：Document.prototype 存在 hidden getter', !!(protoDesc && protoDesc.get));
+    const envDefault = protoDesc.get.call(window.document); // 本 jsdom 的默认可见性（版本差异 visible/prerender）
+    // 判别实验：原型与实例各给一个相反值——实现必须读原型（keepPlay 的 defineProperty 只遮实例）
+    const spoofed = !envDefault;
+    try { Object.defineProperty(window.document, 'hidden', { get: () => envDefault, configurable: true }); } catch (e) {}
+    try { Object.defineProperty(window.Document.prototype, 'hidden', { get: () => spoofed, configurable: true }); } catch (e) {}
+    eq('背景判定：实例伪装不遮蔽原型真值', window.__T.realBg(), spoofed);
+    // 还原原型描述符与实例属性；还原失败时 realBg 仍是 spoofed（≠envDefault）必被抓住
+    try { Object.defineProperty(window.Document.prototype, 'hidden', protoDesc); } catch (e) {}
+    try { delete window.document.hidden; } catch (e) {}
+    eq('背景判定：还原后回到环境默认可见性', window.__T.realBg(), envDefault);
+}
+
+// ===== ⑱ pageCourseContext：四路上下文提取（课程名/作业名/描述表/高亮节剥时长）与导航词排除 =====
+{
+    window.document.body.innerHTML = `
+<header class="el-header"><div class="course-name">高等数学</div></header>
+<div class="title-class">第二章测验</div>
+<div class="homework-describe">课程名称：高等数学（上） 关联章节：第二章 导数与微分</div>
+<ul><li class="el-menu-item is-active">2.1 导数概念 12:34</li></ul>`;
+    eq('课程上下文：四路齐全按序拼接', window.__T.courseCtx(),
+        '高等数学 · 第二章测验 · 高等数学（上） · 第二章 · 2.1 导数概念');
+    window.document.body.innerHTML = `
+<header class="el-header"><div class="course-name">高等数学</div></header>
+<ul><li class="el-menu-item is-active">作业考试</li></ul>`;
+    eq('课程上下文：通用导航词排除', window.__T.courseCtx(), '高等数学');
+    window.document.body.innerHTML = '<div></div>';
+    eq('课程上下文：无来源返回空串（prompt 不注入背景）', window.__T.courseCtx(), '');
+}
+
+// ===== ⑲ 运行时段表：解析 / 区间边界 / 非法值放行 / 跨零点 =====
+{
+    eq('时段解析：标准 HH:MM', JSON.stringify(window.__T.schedParse('23:00-07:00')), JSON.stringify([1380, 420]));
+    eq('时段解析：单位数小时 + ~ 分隔', JSON.stringify(window.__T.schedParse('9:30~11:45')), JSON.stringify([570, 705]));
+    eq('时段解析：小时超界判 null', window.__T.schedParse('24:00-01:00'), null);
+    eq('时段解析：分钟超界判 null', window.__T.schedParse('01:60-02:00'), null);
+    eq('时段解析：乱串判 null', window.__T.schedParse('23点-7点'), null);
+
+    window.__T.conf.schedule = '23:00-07:00'; // 跨零点：22:59 窗外，23:00 起点含，凌晨窗内
+    eq('时段闸：跨零点起点含', window.__T.schedActive(1380), true);
+    eq('时段闸：跨零点凌晨窗内', window.__T.schedActive(300), true);
+    eq('时段闸：跨零点正午窗外', window.__T.schedActive(720), false);
+    window.__T.conf.schedule = '09:00-11:00';
+    eq('时段闸：普通区间起点含', window.__T.schedActive(540), true);
+    eq('时段闸：普通区间终点不含', window.__T.schedActive(660), false);
+    window.__T.conf.schedule = '';
+    eq('时段闸：空配置=全天', window.__T.schedActive(720), true);
+    window.__T.conf.schedule = '25:00-26:00';
+    eq('时段闸：非法配置=全天放行（配错不锁死自动化）', window.__T.schedActive(720), true);
+
+    // 闸门函数：进入窗外打暂停标记并返回 false；恢复空配置后闸门回 true（nowMin 注入免随真实时钟漂移）
+    window.__T.conf.schedule = '23:00-07:00';
+    window.__T.schedGateReset();
+    eq('时段闸：正午调用返回 false', window.__T.schedGate(720), false);
+    eq('时段闸：凌晨调用恢复 true', window.__T.schedGate(300), true);
+    window.__T.conf.schedule = '';
+    eq('时段闸：清空配置后恒放行', window.__T.schedGate(720), true);
+    window.__T.schedGateReset();
+}
+
+// ===== ⑳ 题干图片提取：大图收集 / 去重 / 非法 src / 小图标剔除 / 上限 3 张 =====
+{
+    window.document.body.innerHTML = `
+<div class="homework-single-selected" id="q-imgs">
+  <div class="topic-title">1. 如图求阴影面积 <img src="https://cdn.beeline-ai.com/q1.png"><img src="https://cdn.beeline-ai.com/q1.png"><img src="ftp://x/q2.png"></div>
+  <img id="icon" src="https://cdn.beeline-ai.com/icon.png">
+  <img src="https://cdn.beeline-ai.com/a.png"><img src="https://cdn.beeline-ai.com/b.png"><img src="https://cdn.beeline-ai.com/c.png"><img src="https://cdn.beeline-ai.com/d.png">
+</div>`;
+    const icon = window.document.getElementById('icon');
+    Object.defineProperty(icon, 'offsetWidth', { value: 10, configurable: true }); // 覆盖原型 100 桩
+    Object.defineProperty(icon, 'offsetHeight', { value: 10, configurable: true });
+    const imgs = window.__T.qImages(window.document.querySelector('#q-imgs'));
+    eq('图片提取：大图收集+去重+非 http 协议剔除+上限 3',
+        JSON.stringify(imgs), JSON.stringify(['https://cdn.beeline-ai.com/q1.png', 'https://cdn.beeline-ai.com/a.png', 'https://cdn.beeline-ai.com/b.png']));
+    eq('图片提取：短边<30 图标剔除', imgs.indexOf('https://cdn.beeline-ai.com/icon.png'), -1);
+}
+
+// ===== ㉑ 视觉模型答题链路：题干带图 → 图片拉 dataURL → vision 请求（模型覆盖 + 不降级） =====
+{
+    // jsdom FileReader 异步回调会把链路打散——换同步桩（转换正确性由浏览器保证，这里只验链路）
+    window.FileReader = class {
+        readAsDataURL() {
+            this.result = 'data:image/png;base64,iVBORw0KGgo=';
+            if (this.onload) this.onload({});
+        }
+    };
+    window.__T.conf.visionModel = 'Qwen/Qwen2.5-VL-72B-Instruct';
+    window.__T.conf.apiKey = 'sk-test';
+    singleChoice('q-vision');
+    window.document.querySelector('#q-vision .topic-title')
+        .insertAdjacentHTML('afterend', '<img src="https://cdn.beeline-ai.com/fig1.png">');
+    let imgFetches = 0, llmCaps = [];
+    window.GM_xmlhttpRequest = opts => {
+        if (opts.responseType === 'arraybuffer') { // xaFetchImageDataURL 的图片拉取分支
+            imgFetches++;
+            opts.onload({ response: new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer }); // PNG 魔数
+            return;
+        }
+        llmCaps.push(opts);
+        opts.onload({ status: 200, responseText: JSON.stringify({ choices: [{ message: { content: 'A' } }] }) });
+    };
+    let got = 'NONE';
+    XIA_AI.callAI(XIA_AI.grabQuestion(), a => { got = a; });
+    eq('视觉：题干图片拉取 1 次', imgFetches, 1);
+    eq('视觉：走视觉模型且答案回传', got, 'A');
+    eq('视觉：请求体 model 字段为视觉模型', JSON.parse(llmCaps[0].data).model, 'Qwen/Qwen2.5-VL-72B-Instruct');
+    const vmsg = JSON.parse(llmCaps[0].data).messages[0].content;
+    ok('视觉：消息为多模态数组（1 文本 + 1 图）', Array.isArray(vmsg) && vmsg.length === 2
+        && vmsg[0].type === 'text' && vmsg[1].type === 'image_url');
+    ok('视觉：图片以 PNG dataURL 附带', /^data:image\/png;base64,/.test(vmsg[1].image_url.url));
+
+    // 空内容重试：降级链被 noFallback 关闭——重试仍是视觉模型（deepseek-chat 接不住带图消息）
+    llmCaps = [];
+    window.GM_xmlhttpRequest = opts => {
+        if (opts.responseType === 'arraybuffer') { opts.onload({ response: new Uint8Array([0x89, 0x50]).buffer }); return; }
+        llmCaps.push(opts);
+        opts.onload({ status: 200, responseText: JSON.stringify({ choices: [{ message: { content: '' } }] }) });
+    };
+    got = 'NONE';
+    XIA_AI.callAI(XIA_AI.grabQuestion(), a => { got = a; });
+    ok('视觉：空内容重试共 4 发（首轮+重试 × strict 一轮）', llmCaps.length === 4);
+    eq('视觉：重试不降级到纯文本模型', JSON.parse(llmCaps[1].data).model, 'Qwen/Qwen2.5-VL-72B-Instruct');
+    eq('视觉：两轮全失败如实回调 null', got, null);
+
+    // 图片全部拉取失败：不瞎答，直接 onResult(null) 交回重试/人工
+    llmCaps = [];
+    window.GM_xmlhttpRequest = opts => {
+        if (opts.responseType === 'arraybuffer') { opts.onload({ response: new ArrayBuffer(0) }); return; }
+        llmCaps.push(opts);
+    };
+    got = 'NONE';
+    XIA_AI.callAI(XIA_AI.grabQuestion(), a => { got = a; });
+    eq('视觉：图片全拉取失败不发 LLM 请求', llmCaps.length, 0);
+    eq('视觉：图片全拉取失败回调 null', got, null);
+
+    // 未配视觉模型：维持旧行为（纯文本请求主模型）
+    window.__T.conf.visionModel = '';
+    llmCaps = [];
+    window.GM_xmlhttpRequest = opts => {
+        if (opts.responseType === 'arraybuffer') { opts.onload({ response: new ArrayBuffer(0) }); return; }
+        llmCaps.push(opts);
+        opts.onload({ status: 200, responseText: JSON.stringify({ choices: [{ message: { content: 'B' } }] }) });
+    };
+    got = 'NONE';
+    XIA_AI.callAI(XIA_AI.grabQuestion(), a => { got = a; });
+    eq('视觉：未配视觉模型走主模型纯文本', got, 'B');
+    ok('视觉：纯文本请求 content 是字符串', typeof JSON.parse(llmCaps[0].data).messages[0].content === 'string');
+
+    window.__T.conf.apiKey = '';
+    window.GM_xmlhttpRequest = () => {};
+}
+
+// ===== ㉒ 连接健康检查：最小请求成功带延迟；错误归类；不触发熔断 =====
+{
+    window.__T.conf.apiKey = 'sk-test';
+    window.__T.conf.model = 'deepseek-reasoner';
+    let reqs = [];
+    window.GM_xmlhttpRequest = opts => {
+        reqs.push(opts);
+        opts.onload({ status: 200, responseText: JSON.stringify({ choices: [{ message: { content: 'OK' } }] }) });
+    };
+    let res = null;
+    XIA_AI.healthCheck((okk, info) => { res = { ok: okk, info: info }; });
+    eq('健康检查：请求 max_tokens 收敛为 8', JSON.parse(reqs[0].data).max_tokens, 8);
+    eq('健康检查：200 回调成功', res.ok, true);
+    ok('健康检查：带耗时统计', typeof res.info.ms === 'number' && res.info.ms >= 0);
+
+    const classify = (status, body) => {
+        window.GM_xmlhttpRequest = opts => { opts.onload({ status: status, responseText: body }); };
+        res = null;
+        XIA_AI.healthCheck((okk, info) => { res = { ok: okk, info: info }; });
+        return res.info.why;
+    };
+    eq('健康检查：401 归类 Key 无效', classify(401, '{"error":"auth"}'), 'API Key 无效（401）');
+    eq('健康检查：402 归类余额不足', classify(402, '{}'), '余额不足（402）');
+    eq('健康检查：模型名错误归类', classify(400, '{"error":{"type":"invalid_request_error","param":"model"}}'),
+        '模型名无效');
+    eq('健康检查：检查失败不触发配置熔断', XIA_AI._cfgError, null);
+
+    window.__T.conf.apiKey = '';
+    window.GM_xmlhttpRequest = () => {};
 }
 
 console.log(fail ? ('\n' + fail + ' FAILED / ' + (pass + fail)) : ('✅ ' + pass + '/' + (pass + fail) + ' qa state-machine tests passed'));

@@ -46,6 +46,8 @@ const MUST = [
     '.index-name', '.el-radio', '.el-checkbox', '.course-sidebar-switch',
     '.el-menu-item.is-active', '.done-icon', '.inProgress-icon', '.unStart-icon',
     'disable-menu', '.vjs-play-control', '观看下一章节',
+    // 课程上下文（sites.pageCourseContext）与图片作答上传（utils.xaUploadAnswerPng）
+    '.el-header .course-name', '.title-class', '.homework-describe', 'input[type="file"]',
     // 存储键（GM）
     'xa_unlock_watch_at', 'xa_confirm_answer', 'xa_deadline_summary',
     // 视频内弹题（popup.js，chunk 逆向 DOM 契约）
@@ -54,8 +56,11 @@ const MUST = [
     'queryLearnCoursePage', 'getHomeworkList', '检查作业截止',
     // 端点
     'api.deepseek.com',
+    // 桌面通知（GM_notification 授权 + 开关键 + 面板文案）与 LLM 瞬时故障降级链
+    'GM_notification', 'xa_notify', '后台桌面通知', '降级重试',
     // UI 文案（面板/日志/提交安全）
     '提交作业', '做作业', '下一题', '学习状态异常', '学习进度同步延迟', '请刷新页面后继续学习', '不允许倍速播放', '播放位置不合法',
+    '课程背景', '踩分点',
     '[XinweiAutoStudy] 已加载 v', '[芯位]',
 ];
 const missing = MUST.filter(s => !dist.includes(s));

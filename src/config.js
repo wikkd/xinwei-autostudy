@@ -20,7 +20,6 @@ const CFG = {
 
     DEFAULT_API_BASE: 'https://api.deepseek.com',
     DEFAULT_MODEL: 'deepseek-reasoner', // 思考模型：qa.callAI 按模型名命中 reasoning 正则，自动放宽 max_tokens/超时
-    DEFAULT_SEARCH_PROVIDER: 'bing', // bing(国内直连) / duckduckgo(可能被墙) / tavily(需Key)
     DEFAULT_SEARCH_MODE: 'off',            // off / auto / always；默认 off：检索会向外部引擎发送题目内容，风险项用户显式开启
     SEARCH_MAX_CHARS: 3000,
 };
@@ -28,11 +27,12 @@ const CFG = {
 // 持久化键（GM_setValue / GM_getValue）
 const SK = {
     apiKey: 'xa_apikey', apiBase: 'xa_apibase', model: 'xa_model',
-    apiKeyEnc: 'xa_apikey_enc', // API Key 加密记录 {v,m,s,i,c}（m: dev=本机自动 / pass=口令；加密后明文清空）
-    devKey: 'xa_devkey',        // 本机设备密钥（自动加密模式用，首次随机生成；与密文同存，仅防随手翻看）
     autoAnswer: 'xa_autoanswer', autoPlay: 'xa_autoplay', autoSubmit: 'xa_autosubmit',
     confirmAnswer: 'xa_confirm_answer', // 答题确认模式：AI 填完暂停，人工核对后自行跳题/提交
-    searchProvider: 'xa_search_provider', searchApiKey: 'xa_search_key', searchMode: 'xa_search_mode',
+    notify: 'xa_notify',        // 桌面通知开关（页面在后台时弹系统通知，前台不打扰）
+    searchMode: 'xa_search_mode',
+    schedule: 'xa_schedule',    // 运行时段表 HH:MM-HH:MM（可跨零点；空=全天），时段外自动刷课/答题暂停
+    visionModel: 'xa_vision_model', // 视觉模型（选填）：题干带图时改走该模型看图作答；空=不带图纯文本作答
     panelPos: 'xa_panel_pos',   // 面板/迷你球拖动位置
     minimized: 'xa_minimized',  // 面板是否处于最小化
     lastReload: 'xa_last_reload_at', // 异常弹窗自动刷新的冷却时间戳
@@ -58,9 +58,11 @@ function loadCfg() {
         autoSubmit: b(g(SK.autoSubmit, false)),
         // 默认关闭：开启后 AI 填完答案即暂停，人工核对后自行翻题/提交
         confirmAnswer: b(g(SK.confirmAnswer, false)),
-        searchProvider: g(SK.searchProvider, CFG.DEFAULT_SEARCH_PROVIDER),
-        searchApiKey: g(SK.searchApiKey, ''),
+        // 默认开启：本地系统通知（无网络外发），仅页面在后台时弹，面板可关
+        notify: b(g(SK.notify, true)),
         answerDelay: String(g(SK.answerDelay, '0')),
         searchMode: g(SK.searchMode, CFG.DEFAULT_SEARCH_MODE),
+        schedule: String(g(SK.schedule, '')).trim(),
+        visionModel: String(g(SK.visionModel, '')).trim(),
     };
 }

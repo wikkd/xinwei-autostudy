@@ -49,6 +49,7 @@ const BODY_ORDER = [
     'sites.js',
     'tools.js',
     'qa.js',
+    'cruise.js',
     'ui.js',
     'autoplay.js',
     'popup.js',

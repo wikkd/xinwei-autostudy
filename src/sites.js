@@ -204,6 +204,25 @@ function targetWords(score) {
     return 150;
 }
 
+// 题块内图片提取（视觉模型答题用）：题干/选项带图（几何图、图表、公式截图）时文本模型看不到，
+// 收集 src 交给视觉链路。过滤：非图片协议 src、不可见、短边 <30px 的图标/装饰、重复、上限 3 张
+// 防 token 爆炸。短边阈值取 30：图标普遍 <25px，公式/图形截图矮于 30px 的极罕见。
+function questionImages(root) {
+    const seen = {};
+    const out = [];
+    qsa('img', root).forEach(img => {
+        if (out.length >= 3) return;
+        const src = String(img.getAttribute('src') || img.src || '');
+        if (!/^(https?:|data:image|blob:)/i.test(src)) return;
+        const w = img.offsetWidth || 0, h = img.offsetHeight || 0;
+        if (Math.min(w, h) < 30) return;
+        if (seen[src]) return;
+        seen[src] = 1;
+        out.push(src);
+    });
+    return out;
+}
+
 function extractOptions(root) {
     const opts = [];
     qsa('.el-radio, .el-checkbox', root).forEach(label => {
@@ -242,23 +261,54 @@ function parseQuestionRoot(root) {
     const title = QA.questionTitle(root);
     if (!title || title.length < 3) return null;
     const score = QA.questionScore(root);
-    if (type === 'subjective') return { question: title, options: [], node: root, type: type, score: score };
+    const images = questionImages(root);
+    if (type === 'subjective') return { question: title, options: [], node: root, type: type, score: score, images: images };
     if (type === 'cloze') {
         const blanks = qsa('input', root).filter(el => visible(el) && !/(radio|checkbox|hidden|file|button|submit)/i.test(el.type)).length;
         if (!blanks) return null;
-        return { question: title, options: [], node: root, type: type, blanks: blanks, score: score };
+        return { question: title, options: [], node: root, type: type, blanks: blanks, score: score, images: images };
     }
     const options = QA.extractOptions(root);
     if (!options.length) return null;
-    return { question: title, options: options, node: root, type: (type === 'bool' ? 'single' : type), score: score };
+    return { question: title, options: options, node: root, type: (type === 'bool' ? 'single' : type), score: score, images: images };
 }
 
+
+// 页面课程上下文（prompt 注入用，frontend-map §3.7/§3.2 契约）：
+// 课程名 = 全站头部 .el-header .course-name（作业/视频/课程页共用）；
+// 作业名 = 作业详情头 .title-class；课程名称/关联章节 = .homework-describe 描述表；
+// 视频页当前节 = 侧栏高亮菜单项（剥时长尾巴）。任一路取不到即跳过，全空返回 ''
+// （prompt 不注入课程背景，行为同旧版）。各段截短防噪声：整段 UI 文案不喂给模型。
+function pageCourseContext() {
+    const parts = [];
+    const push = t => {
+        const s = String(t || '').replace(/\s+/g, ' ').trim();
+        if (s && s.length >= 2 && s.length <= 40 && parts.indexOf(s) < 0) parts.push(s);
+    };
+    qsa('.el-header .course-name').forEach(el => push(qtext(el)));
+    const title = document.querySelector('.title-class');
+    if (title) push(qtext(title));
+    const desc = document.querySelector('.homework-describe');
+    if (desc) {
+        const t = qtext(desc);
+        [/课程名称[:：]\s*(\S{2,30})/, /关联章节[:：]\s*(\S{2,30})/].forEach(re => {
+            const m = t.match(re);
+            if (m) push(m[1]);
+        });
+    }
+    const active = document.querySelector('.el-menu-item.is-active');
+    if (active) {
+        const t = qtext(active).replace(/\d{1,2}:\d{2}[\s\S]*$/, '').trim(); // 剥「12:34」时长尾巴
+        if (!/^(学习|作业考试|项目|考试|更多)$/.test(t)) push(t); // 通用导航项不算上下文
+    }
+    return parts.join(' · ').slice(0, 80);
+}
 
 // 题目解析适配器：qa.js 按 QA.xxx 调用；function 声明在同一 IIFE 作用域内提升，
 // 此处可直接引用 qa.js 中的全局解析函数（均定义于本文件）。
 const QA = {
     questionRoot, questionType, isAnswered, letterOf, allSelected,
-    questionScore, extractOptions, questionTitle,
+    questionScore, extractOptions, questionTitle, pageCourseContext,
     // 接口题目镜像（harvest 时代真机校准的接口契约）。运行期已无调用方，
     // 但 test-mirror 以它守护「接口数据 ↔ DOM 解析同构」契约，留作适配层工具备查。
     xaApiMirrorTopic,

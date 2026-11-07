@@ -136,6 +136,14 @@ function buildPanel() {
     </div>
     <button class="xa-btn xa-mute">🔇 关闭静音</button>
     <button class="xa-btn xa-stop" id="xa-deadline-btn" title="立即检查全部在学课程的未完成作业截止时间（平时每 30 分钟自动检查）">⏰ 检查作业截止</button>
+    <div class="xa-row" style="justify-content:space-between;">
+      <span style="font-size:12px;color:#374151;font-weight:600;">后台桌面通知</span>
+      <div class="xa-switch" id="xa-notify-switch" title="页面在后台时，巡航完成/待人工/配置熔断/截止临近等事件弹系统通知；前台不打扰，纯本地无网络外发"></div>
+    </div>
+    <div class="xa-row" style="justify-content:space-between;">
+      <span style="font-size:12px;color:#374151;font-weight:600;">运行时段</span>
+      <input class="xa-input" id="xa-schedule" type="text" placeholder="HH:MM-HH:MM，空=全天" style="width:150px;padding:5px 8px;" title="仅在该时段内执行自动刷课/自动答题（支持跨零点如 23:00-07:00）。时段外自动功能暂停，手动操作不受影响。" />
+    </div>
   </div>
   <!-- Tab 2: AI 答题 -->
   <div class="xa-tab-pane" data-pane="ai">
@@ -145,13 +153,11 @@ function buildPanel() {
     <div class="xa-sec">🔌 接口配置</div>
     <div class="xa-ai-inputs">
       <input class="xa-input" id="xa-apikey" type="password" placeholder="API Key（sk-xxxxxxxx）" />
-      <div class="xa-row" style="gap:6px;">
-        <input class="xa-input" id="xa-pass" type="password" placeholder="🔒 口令（可选加固：拷走密文也解不开）" style="flex:1;min-width:0;" />
-        <button class="xa-btn xa-stop" id="xa-enc-btn" style="flex:none;width:92px;padding:8px 0;font-size:12px;letter-spacing:0;">🔒 加密保存</button>
-      </div>
       <input class="xa-input" id="xa-apibase" type="text" placeholder="API Base（https://api.deepseek.com）" />
       <input class="xa-input" id="xa-model" type="text" placeholder="模型名（deepseek-reasoner / deepseek-chat / gpt-4o-mini）" />
+      <input class="xa-input" id="xa-vision-model" type="text" placeholder="视觉模型（选填，题干带图时用，如 Qwen/Qwen2.5-VL-72B-Instruct）" />
     </div>
+    <button class="xa-btn xa-stop" id="xa-health" title="向当前端点发一条最小请求，测 Key / 模型名 / 连通性与延迟；只做检查，不改变运行状态">🔌 测试连接</button>
     <div class="xa-sec">🔍 检索增强</div>
     <div class="xa-ai-inputs">
       <select class="xa-input" id="xa-search-mode">
@@ -159,12 +165,6 @@ function buildPanel() {
         <option value="auto">检索：自动（事实/时事题）</option>
         <option value="always">检索：总是</option>
       </select>
-      <select class="xa-input" id="xa-search-provider">
-        <option value="bing">来源：Bing（国内直连）</option>
-        <option value="duckduckgo">来源：DuckDuckGo（需代理）</option>
-        <option value="tavily">来源：Tavily（需 Key，更准）</option>
-      </select>
-      <input class="xa-input" id="xa-search-key" type="password" placeholder="Tavily API Key（Bing/DDG 可留空）" />
     </div>
     <div class="xa-btnrow">
       <button class="xa-btn xa-once" id="xa-answer-once" title="只答当前这一题">🎯 答题</button>
@@ -274,9 +274,9 @@ function bindUI() {
     const apikeyInput = $('#xa-apikey');
     const apibaseInput = $('#xa-apibase');
     const modelInput = $('#xa-model');
+    const visionModelInput = $('#xa-vision-model');
     const searchModeInput = $('#xa-search-mode');
-    const searchProviderInput = $('#xa-search-provider');
-    const searchApiKeyInput = $('#xa-search-key');
+    const scheduleInput = $('#xa-schedule');
     const autoSwitch = $('#xa-autoanswer-switch');
     const playSwitch = $('#xa-autoplay-switch');
     const answerDelayInput = $('#xa-answer-delay');
@@ -291,17 +291,43 @@ function bindUI() {
         });
     });
 
-    // 最小化 / 恢复（状态持久化）
-    $('.xa-min-btn').addEventListener('click', () => {
-        panel.classList.add('xa-hidden');
-        mini.classList.add('show');
-        GM_setValue(SK.minimized, true);
+    // 最小化 / 恢复（状态持久化）：按钮与迷你球同一出口，F9 全局快捷键也走这里
+    function toggleMinimize() {
+        const hidden = panel.classList.contains('xa-hidden');
+        panel.classList.toggle('xa-hidden', !hidden);
+        mini.classList.toggle('show', !hidden);
+        GM_setValue(SK.minimized, !hidden);
+        refreshMenuCommands();
+    }
+    $('.xa-min-btn').addEventListener('click', toggleMinimize);
+    mini.addEventListener('click', toggleMinimize);
+    // F9 隐藏/恢复面板（借鉴蜜雪学习通助手的快捷键思路，实现为本库自己的开关）：
+    // 输入控件/富文本编辑器（contenteditable，如主观题作答区）聚焦时不响应，
+    // 避免打字/改配置/写答案时面板突然消失
+    document.addEventListener('keydown', e => {
+        if (e.key !== 'F9') return;
+        const t = e.target;
+        if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(String(t.tagName || '')) || t.isContentEditable)) return;
+        toggleMinimize();
     });
-    mini.addEventListener('click', () => {
-        panel.classList.remove('xa-hidden');
-        mini.classList.remove('show');
-        GM_setValue(SK.minimized, false);
-    });
+
+    // ===== 油猴菜单命令：面板被遮挡/最小化时也能从扩展菜单直接控制核心开关 =====
+    // 菜单文字动态反映当前状态（重注册实现）；环境不支持注销时只挂一次、文字停留在装载时状态。
+    // 菜单项直接 click 面板开关——与面板共用同一状态出口，不会出现两处状态机。
+    let menuIds = null;
+    const canMenu = typeof GM_registerMenuCommand === 'function';
+    const canMenuUnreg = typeof GM_unregisterMenuCommand === 'function';
+    function refreshMenuCommands() {
+        if (!canMenu || (menuIds && !canMenuUnreg)) return;
+        try {
+            if (menuIds) menuIds.forEach(id => { try { GM_unregisterMenuCommand(id); } catch (e) {} });
+            menuIds = [
+                GM_registerMenuCommand((conf.autoAnswer ? '⏸ 暂停自动答题' : '▶ 开启自动答题'), () => autoSwitch.click()),
+                GM_registerMenuCommand((conf.autoPlay ? '⏸ 暂停自动刷课' : '▶ 开启自动刷课'), () => playSwitch.click()),
+                GM_registerMenuCommand((panel.classList.contains('xa-hidden') ? '⬆ 展开面板' : '⬇ 最小化面板'), toggleMinimize),
+            ];
+        } catch (e) { menuIds = null; }
+    }
 
     // API 配置实时保存（改动任一配置项会解除配置熔断）
     const saveInput = (key, el) => {
@@ -313,121 +339,29 @@ function bindUI() {
         el.addEventListener('change', save);
         el.addEventListener('blur', save);
     };
-    // ===== API Key 加密保存：默认自动（本机设备密钥，无感），可选口令加固 =====
-    // 自动模式：密钥以首次随机生成、存于本机的设备密钥加密落盘，明文即刻清除——防存储被
-    // 随手翻看/明文被直接复制。设备密钥与密文同存一处，防不了定向整配置窃取（需口令模式）。
-    const passInput = document.getElementById('xa-pass');
-    const encBtn = document.getElementById('xa-enc-btn');
-    const encRec = () => { try { return JSON.parse(GM_getValue(SK.apiKeyEnc, 'null')); } catch (e) { return null; } };
-    const encActive = () => !!GM_getValue(SK.apiKeyEnc, '');
-    const sessPass = () => { try { return sessionStorage.getItem('xa_kp') || ''; } catch (e) { return ''; } };
-    const setSessPass = pv => { try { sessionStorage.setItem('xa_kp', pv); } catch (e) {} };
-    const writeEnc = async (pass, key, mode) => {
-        const rec = await xaEncEncrypt(pass, key);
-        rec.m = mode; // dev=本机自动 / pass=口令（旧格式记录无 m，按 pass 处理）
-        GM_setValue(SK.apiKeyEnc, JSON.stringify(rec));
-        GM_setValue(SK.apiKey, ''); // 明文即刻清除：GM 存储只留密文
-    };
-    function refreshEncBtn() { encBtn.textContent = (encActive() && !conf.apiKey) ? '🔓 解锁' : '🔒 加密保存'; }
-    function aiReady(note) { setAIStatus(true, 'AI 引擎已就绪（' + note + '）'); }
-    async function tryUnlock(pass, silent) {
-        if (!pass || !encActive()) return false;
-        const key = await xaEncDecrypt(pass, encRec());
-        if (!key) {
-            if (!silent) { XIA_AI.log('🔒 口令错误或密文损坏，解锁失败', 'error'); setAIStatus(false, '解锁失败：口令错误'); }
-            return false;
+    // ===== API Key 保存：明文落 GM 存储（加密保存功能已移除——GM 存储本就与页面隔离，
+    // dev 模式密文与设备密钥同存一处只是混淆级保护，口令模式的输口令成本不值这个防面） =====
+    // 一次性清理历史密文记录与设备密钥（这两个存储键已随功能移除，不再入 SK 表，用字面量）；
+    // 若明文 Key 为空且曾有密文（dev 自动加密是默认，大概率已无明文），提示重新填写
+    if (GM_getValue('xa_apikey_enc', '')) {
+        GM_setValue('xa_apikey_enc', '');
+        GM_setValue('xa_devkey', '');
+        if (!conf.apiKey) {
+            XIA_AI.log('加密保存功能已移除：原加密的 Key 无法自动恢复，请重新填写 API Key', 'error');
+            setAIStatus(false, '请重新填写 API Key');
         }
-        conf.apiKey = key;
-        apikeyInput.value = key;
-        setSessPass(pass);
-        XIA_AI.log('🔒 加密密钥已解锁（本会话有效；本地存储无明文）', 'ok');
-        aiReady('加密解锁');
-        refreshEncBtn();
-        return true;
     }
-    // 启动自动解锁：dev 记录用本机设备密钥静默解密（全自动无感）；pass 记录用
-    // sessionStorage 口令静默解锁，否则等用户输入。旧格式（无 m）按 pass 处理。
-    (async () => {
-        const rec = encRec();
-        if (!rec || conf.apiKey) { refreshEncBtn(); return; }
-        if (rec.m === 'dev') {
-            const key = await xaEncDecrypt(xaDevKey(), rec);
-            if (key) {
-                conf.apiKey = key;
-                apikeyInput.value = key;
-                XIA_AI.log('🔒 已用本机设备密钥自动解锁（存储无明文）', 'ok');
-                aiReady('自动加密');
-            } else {
-                XIA_AI.log('⛔ 自动解锁失败：设备密钥与密文不匹配（存储可能复制自其他设备/浏览器），请重新填写 API Key', 'error');
-                setAIStatus(false, '自动解锁失败，请重填 Key');
-            }
-        } else if (!await tryUnlock(sessPass(), true)) {
-            setAIStatus(false, '密钥已加密，输入口令点「🔓 解锁」');
-        }
-        refreshEncBtn();
-    })();
-    // 按钮：锁定时=解锁；填了口令=口令加密保存（加固）；自动模式无需手动操作
-    encBtn.addEventListener('click', async () => {
-        if (encActive() && !conf.apiKey) { tryUnlock(passInput.value, false); return; }
-        const key = apikeyInput.value.trim();
-        const pass = passInput.value;
-        if (!key || !pass) { XIA_AI.log('自动加密无需手动操作：填写口令后点此按钮可切换为口令加固（密文被拷走也解不开）', 'info'); return; }
-        try {
-            await writeEnc(pass, key, 'pass');
-            conf.apiKey = key;
-            setSessPass(pass);
-            XIA_AI.log('🔒 API Key 已按口令加密保存（AES-GCM-256）：浏览器重启后需输口令解锁', 'ok');
-            aiReady('口令加密');
-            refreshEncBtn();
-        } catch (e) {
-            XIA_AI.log('加密失败（需 https 页面与 WebCrypto 支持）: ' + (e && e.message ? e.message : e), 'error');
-        }
-    });
-    passInput.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && encActive() && !conf.apiKey) tryUnlock(passInput.value, false);
-    });
-    refreshEncBtn();
-
-    // apiKey 保存（覆盖通用 saveInput）：默认自动设备密钥加密；填了口令则口令模式；
-    // 原为口令模式且本会话已解锁时保持口令模式不降级
-    const saveApiKey = async () => {
-        const v = apikeyInput.value.trim();
-        conf.apiKey = v;
-        if (XIA_AI._cfgError) { XIA_AI._cfgError = null; XIA_AI.log('配置已更新，自动答题恢复', 'ok'); }
-        if (!v) { // 清空 Key：明文密文一起清
-            GM_setValue(SK.apiKey, '');
-            GM_setValue(SK.apiKeyEnc, '');
-            refreshEncBtn();
-            return;
-        }
-        const pass = passInput.value;
-        const rec = encRec();
-        try {
-            if (pass) {
-                await writeEnc(pass, v, 'pass');
-                setSessPass(pass);
-                XIA_AI.log('🔒 密钥已按口令加密保存', 'ok');
-            } else if (rec && rec.m !== 'dev' && sessPass()) {
-                await writeEnc(sessPass(), v, 'pass');
-                XIA_AI.log('🔒 密钥已更新，保持口令加密', 'ok');
-            } else {
-                await writeEnc(xaDevKey(), v, 'dev');
-                XIA_AI.log(rec && rec.m !== 'dev'
-                    ? '口令不在本会话，已改为本机自动加密（填写口令可加固）' : '🔒 密钥已自动加密保存（本机设备密钥，无需口令）', rec && rec.m !== 'dev' ? 'info' : 'ok');
-            }
-        } catch (e) {
-            GM_setValue(SK.apiKey, v); // 加密不可用时回退明文，不能丢 Key
-            XIA_AI.log('加密不可用（需 https/WebCrypto），密钥以明文保存', 'error');
-        }
-        refreshEncBtn();
-    };
-    apikeyInput.addEventListener('change', saveApiKey);
-    apikeyInput.addEventListener('blur', saveApiKey);
+    saveInput('apiKey', apikeyInput);
     saveInput('apiBase', apibaseInput);    saveInput('model', modelInput);
+    saveInput('visionModel', visionModelInput);
     saveInput('searchMode', searchModeInput);
-    saveInput('searchProvider', searchProviderInput);
-    saveInput('searchApiKey', searchApiKeyInput);
+    saveInput('schedule', scheduleInput);
     saveInput('answerDelay', answerDelayInput);
+    // 运行时段格式即时校验：写错格式时段闸按全天放行（不锁死自动化），但不提醒用户会误以为已生效
+    scheduleInput.addEventListener('change', () => {
+        const v = scheduleInput.value.trim();
+        if (v && !xaParseScheduleRange(v)) XIA_AI.log('运行时段格式应为 HH:MM-HH:MM（如 23:00-07:00，支持跨零点），当前写法不生效', 'error');
+    });
 
     // API Key 输入时实时更新状态
     apikeyInput.addEventListener('input', () => {
@@ -439,9 +373,9 @@ function bindUI() {
     apikeyInput.value = conf.apiKey;
     apibaseInput.value = conf.apiBase;
     modelInput.value = conf.model;
+    visionModelInput.value = conf.visionModel;
     searchModeInput.value = conf.searchMode;
-    searchProviderInput.value = conf.searchProvider;
-    searchApiKeyInput.value = conf.searchApiKey;
+    scheduleInput.value = conf.schedule;
     answerDelayInput.value = conf.answerDelay;
     setAIStatus(conf.apiKey ? true : null, conf.apiKey ? 'AI 引擎已就绪' : '等待配置 Key');
 
@@ -461,6 +395,7 @@ function bindUI() {
             stopAIScan();
             XIA_AI.log('自动答题已关闭', 'info');
         }
+        refreshMenuCommands();
     }
 
     // 自动提交开关（默认关闭——影响真实成绩的高风险项，可在面板显式开启）
@@ -497,6 +432,23 @@ function bindUI() {
         }
     }
 
+    // 桌面通知开关（默认开启：纯本地能力，仅后台时弹，不弹也无害）
+    const notifySwitch = $('#xa-notify-switch');
+    notifySwitch.addEventListener('click', () => {
+        conf.notify = !conf.notify;
+        GM_setValue(SK.notify, conf.notify);
+        refreshNotifySwitch();
+    });
+    function refreshNotifySwitch() {
+        if (conf.notify) {
+            notifySwitch.classList.add('on');
+            XIA_AI.log('桌面通知已开启：页面在后台时提醒巡航完成/待人工/熔断/截止事件', 'ok');
+        } else {
+            notifySwitch.classList.remove('on');
+            XIA_AI.log('桌面通知已关闭', 'info');
+        }
+    }
+
     // 挂机开关：独立控制主循环
     function refreshPlaySwitch() {
         if (conf.autoPlay) {
@@ -506,6 +458,7 @@ function bindUI() {
             playSwitch.classList.remove('on');
             stopAuto();
         }
+        refreshMenuCommands();
     }
     playSwitch.addEventListener('click', () => {
         conf.autoPlay = !conf.autoPlay;
@@ -561,6 +514,19 @@ function bindUI() {
         deadlineCheck(true);
     });
 
+    // 连接健康检查按钮：结果映到 AI 状态灯（成功带延迟，失败带原因归类）
+    $('#xa-health').addEventListener('click', e => {
+        const b = e.currentTarget;
+        b.disabled = true;
+        b.textContent = '🔌 测试中…';
+        XIA_AI.healthCheck((ok, info) => {
+            b.disabled = false;
+            b.textContent = '🔌 测试连接';
+            info = info || {};
+            setAIStatus(ok === true, ok ? '连接正常（' + (info.ms / 1000).toFixed(1) + 's）' : '连接失败：' + (info.why || '未知原因'));
+        });
+    });
+
     // 静音按钮
     const muteBtn = $('.xa-mute');
     muteBtn.addEventListener('click', () => {
@@ -574,4 +540,6 @@ function bindUI() {
     refreshAISwitch();
     refreshSubmitSwitch();
     refreshConfirmSwitch();
+    refreshNotifySwitch();
+    refreshMenuCommands(); // 按当前开关状态挂油猴菜单（环境不支持时内部静默跳过）
 }
