@@ -170,7 +170,7 @@ function videoStallCheck() {
     const act = stallDecision(stuck, stallStage, CFG.STALL_SEC, CFG.STALL_RELOAD_SEC);
     if (act === 1) {
         stallStage = 1;
-        XIA_AI.log('⏳ 视频 ' + CFG.STALL_SEC + 's 无进度，尝试恢复播放…', 'info');
+        XIA_AI.log(' 视频 ' + CFG.STALL_SEC + 's 无进度，尝试恢复播放…', 'info');
         const btn = qsa('.vjs-play-control').find(visible);
         if (btn) { try { btn.click(); } catch (e) {} }
         try { vid.play().catch(() => {}); } catch (e) {}
@@ -181,7 +181,8 @@ function videoStallCheck() {
         if (Date.now() - last < 20000) return; // 刷新冷却中（如风控恢复刚刷新过）：保持 stage，等冷却
         stallStage = 0;
         GM_setValue(SK.lastReload, Date.now());
-        XIA_AI.log('🔄 视频 ' + CFG.STALL_RELOAD_SEC + 's 无进度且重播无效，自动刷新页面恢复', 'error');
+        XIA_AI.log(' 视频 ' + CFG.STALL_RELOAD_SEC + 's 无进度且重播无效，自动刷新页面恢复', 'error');
+        XIA_AI._allowLeaveAt = Date.now(); // 自家自愈刷新放行防误关闸
         try { location.reload(); } catch (e) {}
     }
 }
@@ -205,7 +206,7 @@ function verifyNavLanding() {
         cooldownUntil = Date.now() + 8000;
     } else {
         navMisses = 0;
-        XIA_AI.log('⚠️ 连续跳转未生效（可能节点被锁或渲染异常），暂停 60s 重试', 'error');
+        XIA_AI.log(' 连续跳转未生效（可能节点被锁或渲染异常），暂停 60s 重试', 'error');
         cooldownUntil = Date.now() + 60000;
     }
 }
@@ -251,18 +252,20 @@ function checkUnlockWatch() {
         const tries = (w.tries || 0) + 1;
         if (tries > UNLOCK_UNKNOWN_MAX) {
             unlockWatchAt = 0; _uwSave(0);
-            XIA_AI.log('⏳ 无法确定章节解锁时间，盲查 ' + UNLOCK_UNKNOWN_MAX + ' 次仍未解锁，已停止守望。请手动查看课程章节开放时间', 'error');
-            XIA_AI.progress('⏳ 未知解锁时间，守望停止');
+            XIA_AI.log(' 无法确定章节解锁时间，盲查 ' + UNLOCK_UNKNOWN_MAX + ' 次仍未解锁，已停止守望。请手动查看课程章节开放时间', 'error');
+            XIA_AI.progress('等待章节解锁（无时间表），守望停止');
             return;
         }
         _uwSave({ at: Date.now() + UNLOCK_UNKNOWN_MS, unlockTs: 0, tries: tries });
-        XIA_AI.log('⏳ 章节开放时间未知，刷新页面复查（第 ' + tries + '/' + UNLOCK_UNKNOWN_MAX + ' 次）…', 'info');
+        XIA_AI.log(' 章节开放时间未知，刷新页面复查（第 ' + tries + '/' + UNLOCK_UNKNOWN_MAX + ' 次）…', 'info');
+        XIA_AI._allowLeaveAt = Date.now(); // 自家守望刷新放行防误关闸
         try { location.reload(); } catch (e) {}
         return;
     }
     unlockWatchAt = 0; // 解锁日已到：刷新页面让菜单按新时间窗重渲染
     _uwSave(0);
-    XIA_AI.log('⏰ 章节解锁时间已到，刷新页面复查开放状态…', 'info');
+    XIA_AI.log(' 章节解锁时间已到，刷新页面复查开放状态…', 'info');
+    XIA_AI._allowLeaveAt = Date.now(); // 同上
     try { location.reload(); } catch (e) {}
 }
 
@@ -317,18 +320,18 @@ function navigateToNextSection() {
             if (!unlockWatchAt) {
                 unlockWatchAt = Date.now() + CFG.UNLOCK_CHECK_MS;
                 _uwSave({ at: unlockWatchAt, unlockTs: unlockTs });
-                XIA_AI.log('⏳ 可见章节已全部完成，仍有 ' + lock.pend.length + ' 个章未到开放时间（' + et + '解锁），'
+                XIA_AI.log(' 可见章节已全部完成，仍有 ' + lock.pend.length + ' 个章未到开放时间（' + et + '解锁），'
                     + '进入守望模式（解锁后自动刷新续刷；其间每分钟轻量复查）', 'ok');
-                XIA_AI.progress('⏳ 等章节解锁（' + et + '）');
+                XIA_AI.progress('等待章节解锁（' + et + '）');
             }
             cooldownUntil = Date.now() + 60000; // 守望期每分钟轻量复查
             return false;
         }
         console.log('[芯位] 目录内未发现未完成章节');
         unlockWatchClear();
-        XIA_AI.log('✅ 侧边栏内未发现未完成章节，挂机完成，已自动停止'
+        XIA_AI.log(' 侧边栏内未发现未完成章节，挂机完成，已自动停止'
             + (lock.expired ? '（另有 ' + lock.expired + ' 章已过期无法完成，属正常）' : ''), 'ok');
-        XIA_AI.progress('✅ 课程已全部完成');
+        XIA_AI.progress('课程已全部完成');
         stopAuto();
         conf.autoPlay = false;
         try { GM_setValue(SK.autoPlay, false); } catch (e) {}
@@ -371,8 +374,9 @@ function installVideoHooks() {
         if (!v || v.__xaHooked) return;
         v.__xaHooked = true;
         v.addEventListener('ended', () => scheduleTick(300));          // 放完 → 立即走完成判定/跳章
-        v.addEventListener('loadedmetadata', () => scheduleTick(500)); // 新节新源 → 尽快催播
+        v.addEventListener('loadedmetadata', () => { xaApplyVideoEco(v); scheduleTick(500); }); // 新节新源 → 尽快催播
         v.addEventListener('play', () => scheduleTick(1500));          // 开始播放 → 刷新卡死基准
+        xaApplyVideoEco(v); // 降画质省性能：已有源立即应用（loadedmetadata 再兜底一次）
     };
     document.querySelectorAll('video').forEach(hook);
     // SPA 换节会频繁重建播放器 DOM；rAF 合并一帧内的全部新增节点再挂载（挂机外零开销）
@@ -422,7 +426,7 @@ function updateCourseProgress() {
         const parts = m[m.length - 1].split(':').map(Number); // 取最后一段匹配（时长通常在节名之后）
         remainSec += parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + parts[1];
     }
-    let text = '📚 课程进度 ' + done + '/' + secs.length + ' 节';
+    let text = '课程进度 ' + done + '/' + secs.length + ' 节';
     if (remainSec > 0) {
         const h = Math.floor(remainSec / 3600), mnt = Math.floor((remainSec % 3600) / 60);
         const est = h > 0 ? h + ' 小时' + (mnt > 0 ? ' ' + mnt + ' 分' : '') : (mnt > 0 ? mnt + ' 分' : '<1 分');
@@ -452,11 +456,13 @@ function mainTick() {
         const vid = watchingVideo();
         const pct = vid && vid.duration > 0 ? Math.floor(vid.currentTime / vid.duration * 100) : null;
         console.log('[芯位] #' + tick + ' | 当前: "' + cur + '"' + (pct != null ? ' | 已观看 ' + pct + '%' : '') + ' | cd=' + cd + 's | 连跳=' + consecutiveJumps);
-        // 面板进度：仅在答题/扫描/配置告警/确认等待闲置时由挂机更新（避免覆盖 📋/📡/⛔/⏸ 等关键信息）
+        // 面板进度：仅在答题/扫描/配置告警/确认等待闲置时由挂机更新（避免覆盖「等待…/待人工…/配置错误…」
+        // 等关键信息；不能用裸「待」判定——初始文本「待机中」会被误当保护行，挂机进度从此不再刷新）
         const pel = document.getElementById('xa-progress');
         const ptxt = pel ? (pel.textContent || '') : '';
-        if (!XIA_AI.answering && !XIA_AI.answeringOnce && !XIA_AI._cfgError && ptxt.indexOf('⏳') !== 0 && ptxt.indexOf('⏸') !== 0) {
-            XIA_AI.progress('▶ ' + cur + (pct != null ? ' · 已观看 ' + pct + '%' : ''));
+        if (!XIA_AI.answering && !XIA_AI.answeringOnce && !XIA_AI._cfgError
+            && ptxt.indexOf('等待') !== 0 && ptxt.indexOf('待人工') !== 0 && ptxt.indexOf('配置错误') !== 0) {
+            XIA_AI.progress(cur + (pct != null ? ' · 已观看 ' + pct + '%' : ''));
         }
     }
     // 题目扫描由 ui.js 的 startAIScan 定时器驱动（自动答题开启时常驻），此处不再重复调用
@@ -480,7 +486,7 @@ function startAuto() {
     mainLoopId = setInterval(mainTick, CFG.INTERVAL * 1000);
     setStatus('正在运行', 'running');
     console.log('[芯位] 自动刷课已启动');
-    XIA_AI.log('🚀 自动挂机已启动，每 ' + CFG.INTERVAL + ' 秒扫描一次页面', 'ok');
+    XIA_AI.log(' 自动挂机已启动，每 ' + CFG.INTERVAL + ' 秒扫描一次页面', 'ok');
 }
 
 function stopAuto() {
@@ -488,5 +494,5 @@ function stopAuto() {
     if (tickTimer) { clearTimeout(tickTimer); tickTimer = null; }
     setStatus('已暂停', 'paused');
     console.log('[芯位] 自动刷课已停止');
-    XIA_AI.log('⏸ 挂机已停止', 'info');
+    XIA_AI.log(' 挂机已停止', 'info');
 }

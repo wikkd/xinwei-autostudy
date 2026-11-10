@@ -99,7 +99,7 @@ const XIA_AI = {
         if (el) {
             const s = XIA_AI.stats;
             el.textContent = '已答 ' + s.answered + ' · 已提交 ' + s.submitted
-                + ((s.tokensIn || s.tokensOut) ? ' · 🪙 ' + xaFmtTok(s.tokensIn) + '→' + xaFmtTok(s.tokensOut) : '');
+                + ((s.tokensIn || s.tokensOut) ? ' ·  ' + xaFmtTok(s.tokensIn) + '→' + xaFmtTok(s.tokensOut) : '');
         }
     },
 
@@ -108,7 +108,7 @@ const XIA_AI = {
     _answerGap() {
         const delay = Math.max(0, parseInt(conf.answerDelay, 10) || 0);
         if (delay) XIA_AI._nextAnswerAt = Date.now() + delay * 1000;
-        XIA_AI.progress('✅ 已答 ' + XIA_AI.stats.answered + ' 题');
+        XIA_AI.progress('已答 ' + XIA_AI.stats.answered + ' 题');
     },
 
     // 会话内同题答案缓存：重做/重进同一份作业、重进视频遇同一弹题时免二次 LLM 调用
@@ -143,8 +143,8 @@ const XIA_AI = {
         if (XIA_AI._imgLogged !== hash) {
             XIA_AI._imgLogged = hash;
             XIA_AI.imgSkipRemember(hash, q.question);
-            XIA_AI.log('🖼️ 该题需要图片作答，已跳过，请人工上传图片: ' + (q.question || '').slice(0, 60), 'error');
-            XIA_AI.progress('🖼️ 图片题已跳过，待人工处理');
+            XIA_AI.log(' 该题需要图片作答，已跳过，请人工上传图片: ' + (q.question || '').slice(0, 60), 'error');
+            XIA_AI.progress('待人工处理：图片题已跳过');
             xaNotify('manual', '题目待人工处理', '图片作答题已跳过，请人工上传图片: ' + (q.question || '').slice(0, 60));
         }
         const now = Date.now();
@@ -159,10 +159,10 @@ const XIA_AI = {
     // 上传派发后平台是否真正收件无法确证——按上传回显检测，检不到时日志明示请人工核对。
     answerImageQuestion(q, hash) {
         XIA_AI.lastQuestionHash = hash; // 处理中先占坑，防同题重复扫描
-        XIA_AI.answering = true; // 占住答题态：扫描暂停、mainTick 不覆盖 🖼️ 进度行（所有出口复位）
+        XIA_AI.answering = true; // 占住答题态：扫描暂停、mainTick 不覆盖  进度行（所有出口复位）
         if (XIA_AI._imgBusyHash === hash) return;
         XIA_AI._imgBusyHash = hash;
-        XIA_AI.log('🖼️ 图片作答题：生成文本答案并渲染成图片自动上传', 'ai');
+        XIA_AI.log(' 图片作答题：生成文本答案并渲染成图片自动上传', 'ai');
         XIA_AI.callAI({ question: q.question, options: [], type: 'subjective', score: q.score, node: q.node }, ans => {
             if (!ans) {
                 XIA_AI._imgBusyHash = '';
@@ -178,7 +178,7 @@ const XIA_AI = {
                     XIA_AI.handleImageSkip(q, hash);
                     return;
                 }
-                XIA_AI.log('🖼️ 答案图片已提交上传控件，3s 后校验上传回显', 'ok');
+                XIA_AI.log(' 答案图片已提交上传控件，3s 后校验上传回显', 'ok');
                 setTimeout(() => {
                     XIA_AI._imgBusyHash = '';
                     const box = (q.node.closest && q.node.closest('.question-box')) || q.node;
@@ -187,7 +187,7 @@ const XIA_AI = {
                     }
                     XIA_AI.bump('answered');
                     if (conf.confirmAnswer) { // 确认模式：上传后停，人工核对再翻题
-                        XIA_AI.progress('⏸ 图片题已上传，待人工确认');
+                        XIA_AI.progress('待人工确认：图片题已上传');
                         XIA_AI.answering = false;
                         return;
                     }
@@ -343,7 +343,7 @@ const XIA_AI = {
             }
         }
         this.courseLangSave(prof);
-        if (crossed) XIA_AI.log('🧠 课程语言记忆：已记住「' + key + '」主要涉及 ' + names.join('、') + '，后续题目将按此作答', 'ok');
+        if (crossed) XIA_AI.log(' 课程语言记忆：已记住「' + key + '」主要涉及 ' + names.join('、') + '，后续题目将按此作答', 'ok');
     },
     courseLangLine(course) {
         const key = this.courseLangKey(course);
@@ -490,7 +490,7 @@ const XIA_AI = {
         const retryModel = opts.noFallback ? model : (officialDs && model !== 'deepseek-chat' ? 'deepseek-chat' : model);
         const retry = (attempt, why) => {
             if (attempt > 0) { onContent(null); return; }
-            XIA_AI.log('⚠️ ' + why + '，' + (retryModel === model ? '同模型重试' : '降级重试 ' + retryModel), 'warn');
+            XIA_AI.log(' ' + why + '，' + (retryModel === model ? '同模型重试' : '降级重试 ' + retryModel), 'warn');
             send(retryModel, 1);
         };
         const send = (mdl, attempt) => {
@@ -518,8 +518,8 @@ const XIA_AI = {
                                 XIA_AI._cfgError = 'API 余额不足（402），请充值或更换接口';
                             }
                             if (XIA_AI._cfgError) {
-                                XIA_AI.log('⛔ ' + XIA_AI._cfgError + '，已暂停自动答题', 'error');
-                                XIA_AI.progress('⛔ 配置错误，已暂停');
+                                XIA_AI.log(' ' + XIA_AI._cfgError + '，已暂停自动答题', 'error');
+                                XIA_AI.progress('配置错误，已暂停');
                                 xaNotify('cfg', '自动答题已暂停', XIA_AI._cfgError);
                                 onContent(null); return;
                             }
@@ -563,7 +563,7 @@ const XIA_AI = {
         const base = (conf.apiBase || CFG.DEFAULT_API_BASE).replace(/\/+$/, '');
         const endpoint = /\/v\d+\/?$/.test(base) ? base + '/chat/completions' : base + '/v1/chat/completions';
         const model = conf.model || CFG.DEFAULT_MODEL;
-        XIA_AI.log('🔌 测试连接 ' + endpoint + '（模型 ' + model + '）…', 'ai');
+        XIA_AI.log(' 测试连接 ' + endpoint + '（模型 ' + model + '）…', 'ai');
         const t0 = Date.now();
         try {
             GM_xmlhttpRequest({
@@ -581,7 +581,7 @@ const XIA_AI = {
                         else if (status === 402) why = '余额不足（402）';
                         else if (status === 429) why = '限流（429，Key 有效但被限流）';
                         else if (/invalid_request_error/i.test(body) && /model/i.test(body)) why = '模型名无效';
-                        XIA_AI.log('🔌 测试失败：' + why + ' | ' + body.slice(0, 160), 'error');
+                        XIA_AI.log(' 测试失败：' + why + ' | ' + body.slice(0, 160), 'error');
                         if (onDone) onDone(false, { ms: ms, why: why });
                         return;
                     }
@@ -590,14 +590,14 @@ const XIA_AI = {
                         const d = JSON.parse(body);
                         content = (d.choices && d.choices[0] && d.choices[0].message && d.choices[0].message.content) || '';
                     } catch (e) {}
-                    XIA_AI.log('🔌 测试通过（' + ms + 'ms）' + (content ? '：模型回复 "' + content.trim().slice(0, 20) + '"' : ''), 'ok');
+                    XIA_AI.log(' 测试通过（' + ms + 'ms）' + (content ? '：模型回复 "' + content.trim().slice(0, 20) + '"' : ''), 'ok');
                     if (onDone) onDone(true, { ms: ms, content: content });
                 },
-                onerror: () => { XIA_AI.log('🔌 测试失败：网络错误（端点不可达或被墙）', 'error'); if (onDone) onDone(false, { why: '网络错误' }); },
-                ontimeout: () => { XIA_AI.log('🔌 测试失败：连接超时（>20s）', 'error'); if (onDone) onDone(false, { why: '连接超时' }); },
+                onerror: () => { XIA_AI.log(' 测试失败：网络错误（端点不可达或被墙）', 'error'); if (onDone) onDone(false, { why: '网络错误' }); },
+                ontimeout: () => { XIA_AI.log(' 测试失败：连接超时（>20s）', 'error'); if (onDone) onDone(false, { why: '连接超时' }); },
             });
         } catch (e) {
-            XIA_AI.log('🔌 测试请求异常: ' + e.message, 'error');
+            XIA_AI.log(' 测试请求异常: ' + e.message, 'error');
             if (onDone) onDone(false, { why: '请求异常' });
         }
     },
@@ -646,7 +646,7 @@ const XIA_AI = {
                     + (strict ? '\n\n（重要：上一轮回复格式不符合要求。请严格按约定格式只输出答案本身，不要输出任何其他文字。）' : '');
                 const content = [{ type: 'text', text: prompt }]
                     .concat(imgs.map(u => ({ type: 'image_url', image_url: { url: u } })));
-                XIA_AI.log('🖼️ 请求视觉模型 ' + visionModel + '（' + imgs.length + ' 张图' + (strict ? '，格式重试' : '') + '）', 'ai');
+                XIA_AI.log(' 请求视觉模型 ' + visionModel + '（' + imgs.length + ' 张图' + (strict ? '，格式重试' : '') + '）', 'ai');
                 XIA_AI._llmChat([{ role: 'user', content: content }],
                     { model: visionModel, noFallback: true, maxTokens: vMax, timeout: 60000, temperature: 0.3 }, resp => {
                         const answer = XIA_AI.parseAnswer(resp, type, validLetters, q.options);
@@ -662,7 +662,7 @@ const XIA_AI = {
             };
             let left = q.images.length;
             const got = [];
-            XIA_AI.log('🖼️ 题干带 ' + q.images.length + ' 张图，拉取后走视觉模型 ' + visionModel, 'ai');
+            XIA_AI.log(' 题干带 ' + q.images.length + ' 张图，拉取后走视觉模型 ' + visionModel, 'ai');
             q.images.forEach(src => {
                 xaFetchImageDataURL(src, d => {
                     if (d) got.push(d);
@@ -699,7 +699,7 @@ const XIA_AI = {
                 + '- 仅在确有验证价值时才运行（如验证输出、模拟循环、核算数值），不要为运行而运行';
             let messages = [{ role: 'user', content: XIA_AI.buildPrompt(q.question, q.options, type, '', q.score, q.blanks, course) + proto }];
             let nudged = false; // 格式纠正只做一次
-            XIA_AI.log('🧠 ' + (XA_TOOLS.needsCodeTool(q.question) ? '代码题' : '计算题') + '：启用本机沙箱执行辅助（≤3 轮）', 'ai');
+            XIA_AI.log(' ' + (XA_TOOLS.needsCodeTool(q.question) ? '代码题' : '计算题') + '：启用本机沙箱执行辅助（≤3 轮）', 'ai');
             const finish = content => {
                 const answer = XIA_AI.parseAnswer(XA_TOOLS.stripRunBlocks(content), type, validLetters, q.options);
                 if (answer) {
@@ -715,9 +715,9 @@ const XIA_AI = {
                     if (!content) { onResult(null); return; }
                     const code = XA_TOOLS.extractRunBlock(content);
                     if (code && left > 0) {
-                        XIA_AI.log('🧪 沙箱运行模型代码（' + (3 - left + 1) + '/3）…', 'ai');
+                        XIA_AI.log(' 沙箱运行模型代码（' + (3 - left + 1) + '/3）…', 'ai');
                         XA_TOOLS.runJs(code, r => {
-                            XIA_AI.log('🧪 运行结果: ' + XA_TOOLS.formatRunResult(r).replace(/\n/g, ' ').slice(0, 90), 'ai');
+                            XIA_AI.log(' 运行结果: ' + XA_TOOLS.formatRunResult(r).replace(/\n/g, ' ').slice(0, 90), 'ai');
                             messages = messages.concat([
                                 { role: 'assistant', content: content },
                                 { role: 'user', content: '运行结果：\n' + XA_TOOLS.formatRunResult(r) + '\n\n请继续分析；若已有结论，直接给最终答案，不要再输出 run 代码块。' },
@@ -772,7 +772,7 @@ const XIA_AI = {
         };
 
         if (needSearch) {
-            XIA_AI.log('🔍 先检索相关资料…', 'ai');
+            XIA_AI.log(' 先检索相关资料…', 'ai');
             XIA_AI.searchWeb(q.question, ctx => ask(ctx || '', false));
         } else {
             ask('', false);
@@ -931,8 +931,8 @@ const XIA_AI = {
                 XIA_AI.bump('answered');
                 XIA_AI._answerGap();
                 if (conf.confirmAnswer) { // 确认模式：填完即停，人工核对后自行翻题/提交（保留 hash 防重答）
-                    XIA_AI.log('⏸ 确认模式：答案已填入，请人工核对后自行点击下一题或提交', 'info');
-                    XIA_AI.progress('⏸ 已填入，待人工确认');
+                    XIA_AI.log(' 确认模式：答案已填入，请人工核对后自行点击下一题或提交', 'info');
+                    XIA_AI.progress('待人工确认：答案已填入');
                     XIA_AI.answering = false;
                     return;
                 }
@@ -970,11 +970,11 @@ const XIA_AI = {
             return;
         }
         if (isImageAnswerQuestion(q.node)) {
-            XIA_AI.log('🖼️ 该题需要图片作答，请人工上传图片', 'error');
+            XIA_AI.log(' 该题需要图片作答，请人工上传图片', 'error');
             return;
         }
         XIA_AI.answeringOnce = true;
-        XIA_AI.log('🎯 单次答题: ' + q.question.slice(0, 60) + (q.question.length > 60 ? '…' : ''), 'ok');
+        XIA_AI.log(' 单次答题: ' + q.question.slice(0, 60) + (q.question.length > 60 ? '…' : ''), 'ok');
         XIA_AI.callAI(q, answer => {
             XIA_AI.answeringOnce = false;
             if (!answer) return;
@@ -999,7 +999,7 @@ const XIA_AI = {
             const now = Date.now();
             if (now - XIA_AI._cfgLogAt > 30000) {
                 XIA_AI._cfgLogAt = now;
-                XIA_AI.log('⏸ 已暂停：' + XIA_AI._cfgError, 'error');
+                XIA_AI.log(' 已暂停：' + XIA_AI._cfgError, 'error');
             }
             return;
         }
@@ -1008,7 +1008,7 @@ const XIA_AI = {
 
         // 答题间隔：答完一题后等待 N 秒再答下一题（面板可配，0=不等待）
         if (XIA_AI._nextAnswerAt && Date.now() < XIA_AI._nextAnswerAt) {
-            XIA_AI.progress('⏳ 答题间隔 ' + Math.ceil((XIA_AI._nextAnswerAt - Date.now()) / 1000) + 's');
+            XIA_AI.progress('等待答题间隔 ' + Math.ceil((XIA_AI._nextAnswerAt - Date.now()) / 1000) + 's');
             return;
         }
 
@@ -1055,8 +1055,8 @@ const XIA_AI = {
     // 答题主流程：会话缓存 → 检索 → LLM（原 scan 主体后段）
     scanAI(q, hash) {
         XIA_AI.answering = true;
-        XIA_AI.progress('📋 ' + q.question.slice(0, 24));
-        XIA_AI.log('📋 抓到题目: ' + q.question.slice(0, 60) + (q.question.length > 60 ? '…' : '')
+        XIA_AI.progress(q.question.slice(0, 24));
+        XIA_AI.log(' 抓到题目: ' + q.question.slice(0, 60) + (q.question.length > 60 ? '…' : '')
             + ' [' + q.type + (q.score ? ' ' + q.score + '分' : '') + ']');
         if (q.options.length) XIA_AI.log('选项 ' + q.options.length + ' 个: ' + q.options.map(o => o.letter).join(' '));
 
@@ -1069,8 +1069,8 @@ const XIA_AI = {
                         XIA_AI.bump('answered');
                         XIA_AI._answerGap();
                         if (conf.confirmAnswer) { // 确认模式：主观题人工核对修改，不代跳
-                            XIA_AI.log('⏸ 确认模式：主观题答案已填入，请人工核对修改', 'info');
-                            XIA_AI.progress('⏸ 已填入，待人工确认');
+                            XIA_AI.log(' 确认模式：主观题答案已填入，请人工核对修改', 'info');
+                            XIA_AI.progress('待人工确认：答案已填入');
                             XIA_AI.answering = false;
                             return;
                         }
@@ -1092,7 +1092,7 @@ const XIA_AI = {
 
         const memo = XIA_AI._answerMemo[hash];
         if (memo !== undefined) {
-            XIA_AI.log('♻️ 本会话已答过同题，直接复用答案（免 LLM 请求）', 'ok');
+            XIA_AI.log(' 本会话已答过同题，直接复用答案（免 LLM 请求）', 'ok');
             apply(memo);
             return;
         }
@@ -1121,32 +1121,32 @@ const XIA_AI = {
         else XIA_AI.log('[测试] 无选项（主观题属正常）', 'ai');
     },
 
-    // 🩺 诊断：dump 当前页题目 DOM 结构（平台改版后按真机结构修选择器用）
+    //  诊断：dump 当前页题目 DOM 结构（平台改版后按真机结构修选择器用）
     diagnose() {
         const out = [];
         const push = s => { out.push(s); XIA_AI.log(s, 'ai'); };
-        push('🩺 诊断 ' + location.href.slice(0, 70));
+        push(' 诊断 ' + location.href.slice(0, 70));
         const roots = qsa(XIA_QROOT);
-        push('① .homework-*根=' + roots.length + (roots.length ? '' : ' → 走兜底'));
+        push(' .homework-*根=' + roots.length + (roots.length ? '' : ' → 走兜底'));
         roots.slice(0, 5).forEach((r, i) => push('  [' + i + '] class="' + (r.className || '').slice(0, 60) + '" h=' + r.offsetHeight + ' 类型=' + questionType(r)));
         const tags = qsa('.question-tag-score');
-        push('② .question-tag-score=' + tags.length);
+        push(' .question-tag-score=' + tags.length);
         if (tags.length) {
             const p = tags[0].closest('.question-box') || tags[0].parentElement;
             if (p) push('  兜底容器 class="' + (p.className || '').slice(0, 60) + '" 含题干=' + !!p.querySelector('.topic-title, .subject-title'));
         }
-        push('③ div.question=' + qsa('div.question').length + '（旧结构，应为0）');
-        push('④ iframe=' + qsa('iframe').length + ' radio=' + qsa('.el-radio').length + ' checkbox=' + qsa('.el-checkbox').length);
+        push(' div.question=' + qsa('div.question').length + '（旧结构，应为0）');
+        push(' iframe=' + qsa('iframe').length + ' radio=' + qsa('.el-radio').length + ' checkbox=' + qsa('.el-checkbox').length);
         const root = questionRoot();
-        if (!root) { push('❌ 未定位到题目容器'); console.log('[XIA-diagnose]\n' + out.join('\n')); return; }
-        push('⑤ 选中容器 class="' + (root.className || '').slice(0, 60) + '" 类型=' + questionType(root) + ' 已答=' + isAnswered(root));
-        push('⑥ 题干=' + (questionTitle(root) || '(空)').slice(0, 90));
+        if (!root) { push(' 未定位到题目容器'); console.log('[XIA-diagnose]\n' + out.join('\n')); return; }
+        push(' 选中容器 class="' + (root.className || '').slice(0, 60) + '" 类型=' + questionType(root) + ' 已答=' + isAnswered(root));
+        push(' 题干=' + (questionTitle(root) || '(空)').slice(0, 90));
         const opts = extractOptions(root);
-        push('⑦ 选项=' + opts.length);
+        push(' 选项=' + opts.length);
         opts.slice(0, 8).forEach(o => push('  ' + o.letter + ': ' + o.text.slice(0, 45)));
         console.log('[XIA-diagnose]\n' + out.join('\n'));
     },
 
-    // 🧭 一键作业巡航：从当前课程页打开「作业考试」列表。实现委托 cruise.js 的 runCruise。
+    //  一键作业巡航：从当前课程页打开「作业考试」列表。实现委托 cruise.js 的 runCruise。
     cruise() { return runCruise(); },
 };

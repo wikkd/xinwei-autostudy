@@ -26,6 +26,7 @@ module.exports = [
             // tmp 其余内容（逆向样本/历史调试脚本）不 lint；显式枚举而非 tmp/** + 负向放行——
             // 扁平配置的 ignore 负向模式对直接指定路径的场景不可靠，bundle 必须稳稳落在 lint 范围内
             'tmp/research/**',
+            'tmp/cdp*.js', // 本机 CDP 验证脚本（浏览器调试用，非仓库交付物）
             'tmp/debug-case7.js',
             'tmp/test-imgregex.js',
             'tmp/test-tiku.js',

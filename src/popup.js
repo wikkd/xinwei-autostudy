@@ -1,13 +1,13 @@
 // ==================== 学习状态异常弹窗自动刷新 ====================
 // 平台风控弹窗出现时脚本无法操作，检测到后自动刷新页面恢复；刷新后按面板开关状态自动续跑。
 // 三条服务端风控文案（2026-10-01 chunk 调研实锤，前端 0 命中→判定在服务端下发）：
-//   ① 当前视频不允许倍速播放  ② 系统检测到你的学习状态异常，请刷新后继续学习  ③ 播放位置不合法
-// ④ 学习进度同步延迟，请刷新页面后继续学习（2026-11-02 真机新见，白色无按钮 toast）。
+//    当前视频不允许倍速播放   系统检测到你的学习状态异常，请刷新后继续学习   播放位置不合法
+//  学习进度同步延迟，请刷新页面后继续学习（2026-11-02 真机新见，白色无按钮 toast）。
 // 措辞兜底两条：「请刷新后继续学习」与带「页面」的变体「请刷新页面后继续学习」——
 // 后者不能靠前者命中（「刷新后」不是「刷新页面后」的子串），必须单列。
 //
 // 性能：快/慢双路径。快路径每 3s 只看可见弹窗/浮层节点（风控文案走 el-message-box，
-// ④ 这类进度提示走 el-message toast，无弹窗零成本）；全页 innerText 会强制样式重算+重排，
+//  这类进度提示走 el-message toast，无弹窗零成本）；全页 innerText 会强制样式重算+重排，
 // 慢路径再分两档降频——屏上有「疑似浮层但未命中已知文案」时 20s 一次升格全页扫；
 // 干净页面 60s 一次无条件扫（未知实现的新文案兜底，最坏比原来晚 40s 发现）。
 
@@ -20,7 +20,10 @@ function initPopupAutoReload() {
         GM_setValue(SK.lastReload, Date.now());
         console.log('[芯位] 检测到平台风控弹窗（' + hit + '），3秒后自动刷新页面');
         xaNotify('risk', '检测到平台风控提示', '「' + hit + '」，3 秒后自动刷新页面续跑'); // 通知与页面刷新互不影响（系统级）
-        setTimeout(() => { location.reload(); }, 3000);
+        setTimeout(() => {
+            XIA_AI._allowLeaveAt = Date.now(); // 防误关 beforeunload 放行自家自愈刷新
+            location.reload();
+        }, 3000);
     };
     setInterval(() => {
         const last = Number(GM_getValue(SK.lastReload, 0));
@@ -85,7 +88,7 @@ function markerQuestionTick() {
     if (_mqState === 'submitted' || !dlg.querySelector('.el-dialog__footer .el-button')) {
         const close = dlg.querySelector('.icon-close');
         if (close && visible(close)) {
-            XIA_AI.log('📕 弹题已作答，关闭浮层恢复播放', 'ok');
+            XIA_AI.log(' 弹题已作答，关闭浮层恢复播放', 'ok');
             try { close.click(); } catch (e) {}
             _mqState = '';
         }
@@ -95,7 +98,7 @@ function markerQuestionTick() {
     if (_mqFails[key] >= 2) return; // 同题连败 2 次：留人工，不再打扰
 
     _mqState = 'busy';
-    XIA_AI.log('🎬 视频弹题: ' + title.slice(0, 50) + (title.length > 50 ? '…' : '') + (isMulti ? '（多选）' : ''), 'ai');
+    XIA_AI.log(' 视频弹题: ' + title.slice(0, 50) + (title.length > 50 ? '…' : '') + (isMulti ? '（多选）' : ''), 'ai');
 
     XIA_AI.callAI({ question: title, options: options, type: isMulti ? 'multi' : 'single', score: 0 }, ans => {
         if (!qsa('.popup-topic-dialog').includes(dlg) || !visible(dlg)) { _mqState = ''; return; } // 弹窗已不在，丢弃过期结果
@@ -119,7 +122,7 @@ function markerQuestionTick() {
         XIA_AI.log('弹题已选 ' + letters.join(''), 'ok');
         if (conf.confirmAnswer) { // 确认模式：只填不交，人工核对后点提交，视频随之恢复
             _mqState = 'filled';
-            XIA_AI.progress('⏸ 弹题已填，待人工确认');
+            XIA_AI.progress('待人工确认：弹题已填');
             return;
         }
         setTimeout(() => {

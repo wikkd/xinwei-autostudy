@@ -17,9 +17,9 @@ function qtextAll(el) { return ((el && el.textContent) || '').replace(/\s+/g, ''
 
 // ==================== 整页静音 ====================
 // 三重拦截，保证开启静音后页面完全无声（面板可一键恢复声音）：
-// ① 新挂载的 video/audio 立即静音（MutationObserver，含动态创建的元素）
-// ② 劫持 HTMLMediaElement.play()：任何播放调用先静音（堵住轮询间隙）
-// ③ 捕获 volumechange：页面/播放器任何取消静音的操作即时压回（该事件不冒泡，必须用捕获）
+//  新挂载的 video/audio 立即静音（MutationObserver，含动态创建的元素）
+//  劫持 HTMLMediaElement.play()：任何播放调用先静音（堵住轮询间隙）
+//  捕获 volumechange：页面/播放器任何取消静音的操作即时压回（该事件不冒泡，必须用捕获）
 function installMute() {
     try {
         // 批次合并：SPA 导航/大列表渲染会产生成百上千个 addedNode，逐节点 QSA 是纯浪费。
@@ -351,8 +351,8 @@ function xaScheduleGate(nowMin) {
     if (active !== _xaScheduleWasActive) {
         _xaScheduleWasActive = active;
         XIA_AI.log(active
-            ? '▶ 已进入运行时段，自动刷课/答题恢复'
-            : '⏸ 已到暂停时段（' + (conf.schedule || '') + '），自动刷课/答题暂停，手动操作不受影响',
+            ? ' 已进入运行时段，自动刷课/答题恢复'
+            : ' 已到暂停时段（' + (conf.schedule || '') + '），自动刷课/答题暂停，手动操作不受影响',
             active ? 'ok' : 'info');
     }
     return active;
@@ -391,4 +391,246 @@ function xaFetchImageDataURL(src, cb) {
             ontimeout: () => done(''),
         });
     } catch (e) { done(''); }
+}
+
+// ==================== 页面动画冻结（省电，默认启用无开关）====================
+
+// 把全页 CSS 动画/过渡压到近零时长：Element Plus 骨架屏微光、loading 旋转、弹窗/菜单过渡
+// 全部瞬时完成，省合成与绘制开销（页面侧唯一动不了的旁路是视频解码与播放器本体）。
+// 三处刻意为之：
+//   · 用 0.01ms 而非 animation:none —— animationend/transitionend 必须照常触发，
+//     Vue 的 whenTransitionEnds/after-leave 等回调等的是事件，none 会把组件挂死在过渡态；
+//   · iteration-count:1 必须配对 —— 只压时长不压次数，无限旋转会变成每秒十万次迭代，反而更卡；
+//   · 不动 animation-fill-mode/timing-function —— fill-mode:forwards 的入场动画要落到终态。
+// JS 驱动的动效（跑马灯 scrollLeft 跳位、播放器进度刷新）不受本规则影响，也不该受影响。
+function xaFreezePageAnim() {
+    if (document.getElementById('xa-anim-freeze')) return;
+    const el = document.createElement('style');
+    el.id = 'xa-anim-freeze';
+    el.textContent = '*,*::before,*::after{'
+        + 'animation-duration:0.01ms!important;animation-delay:0ms!important;animation-iteration-count:1!important;'
+        + 'transition-duration:0.01ms!important;transition-delay:0ms!important;'
+        + 'scroll-behavior:auto!important}';
+    (document.head || document.documentElement).appendChild(el);
+}
+
+// ==================== 竖屏适配（视口 ≤1199px 生效，纯表现层）====================
+
+// 芯位布局层零响应式（主 CSS 442KB + 7 个布局组件 CSS 共 0 条 @media，2026-11-10 实测）：
+// 学习页双布局都是 min-width:1200px 硬墙，竖屏（iPad ~810px、竖装显示器 1080px）只能横向滚动。
+// 内层组件全是流式 flex——解锁 min-width 即大部分自然回弹；头部 88px/74px 边距、logo 142px、
+// 课程名 26px 一并收敛。条条带 !important 压平台同规则；不限定 orientation，分屏窄窗口同受惠。
+// 刻意不做的事：目录盒不用 display:none（自动跳章要读侧边栏目录 DOM，隐藏不影响查询但破坏点击），
+// 视频播放器不设固定尺寸（video 本身流式）。与动画冻结（#xa-anim-freeze）各自独立，幂等。
+function xaPortraitCSS() {
+    if (document.getElementById('xa-portrait-css')) return;
+    const el = document.createElement('style');
+    el.id = 'xa-portrait-css';
+    el.textContent = '@media (max-width:1199px){'
+        + '.el-container.teaching-layout{min-width:0!important}'
+        + '.el-container .el-main{min-width:0!important}'
+        + '.layout{min-width:0!important}'
+        + '.teaching-layout .el-header{height:auto!important;min-height:56px;padding:6px 12px!important}'
+        + '.teaching-layout .header-lf{padding-right:12px!important}'
+        + '.teaching-layout .header-lf .logo-img{width:100px!important}'
+        + '.teaching-layout .header-mid .course-name{font-size:16px!important;line-height:22px!important;padding-right:12px!important;text-align:left!important}'
+        + '.teaching-layout .header-mid .examine-progress{min-width:0!important}'
+        + '.teaching-layout .header-rf a{padding-right:16px!important}'
+        + '.el-main{padding:8px!important}'
+        + '}';
+    (document.head || document.documentElement).appendChild(el);
+}
+
+// ==================== 主观题草稿防丢（纯本地）====================
+
+// 场景：用户在简答/论述编辑器手打内容时，页面被我们的风控自愈刷新/浏览器崩溃/误关——内容全丢。
+// 每 5s 轻扫题块编辑器，非空即存 GM 本地（题干 hash 键）；刷新/后退进来的新页面生命中，编辑器为空
+// 且有草稿 → 用 answerSubjective 同款合成输入恢复（一次性，恢复即删草稿）。上限 20 条、7 天过期。
+const XA_DRAFT_CAP = 20, XA_DRAFT_TTL = 7 * 24 * 3600 * 1000;
+
+function xaDraftKey(title) {
+    const s = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+    let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    return String(h >>> 0);
+}
+
+function xaDraftAll() {
+    try { return JSON.parse(GM_getValue(SK.drafts, '{}')) || {}; } catch (e) { return {}; }
+}
+
+function xaDraftStore(store) {
+    const now = Date.now();
+    const list = Object.keys(store).filter(k => store[k] && store[k].text).sort((a, b) => b.at - a.at);
+    const keep = {};
+    list.slice(0, XA_DRAFT_CAP).forEach(k => { if (now - store[k].at < XA_DRAFT_TTL) keep[k] = store[k]; });
+    GM_setValue(SK.drafts, JSON.stringify(keep));
+}
+
+// 恢复写入：与 answerSubjective 同款合成输入（beforeinput 优先、execCommand 兜底），长度回读判活
+function xaDraftRestoreInto(editor, text) {
+    const paras = String(text).split(/\n+/).map(s => s.replace(/\s+$/, '')).filter(Boolean);
+    if (!paras.length || !editor) return false;
+    try { editor.focus(); } catch (e) {}
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    const range = document.createRange();
+    range.selectNodeContents(editor);
+    sel.addRange(range);
+    const normLen = () => (editor.textContent || '').replace(/\s+/g, '').length;
+    const bi = (inputType, data) => {
+        try {
+            editor.dispatchEvent(new InputEvent('beforeinput', {
+                bubbles: true, cancelable: true, inputType: inputType, data: data,
+            }));
+        } catch (e) {}
+    };
+    let len = normLen();
+    for (let i = 0; i < paras.length; i++) {
+        if (i > 0) bi('insertParagraph', null);
+        bi('insertText', paras[i]);
+        if (normLen() === len) {
+            try { if (i > 0) document.execCommand('insertParagraph', false); } catch (e) {}
+            try { document.execCommand('insertText', false, paras[i]); } catch (e) {}
+        }
+        len = normLen();
+    }
+    if (normLen() === 0) {
+        // 合成输入未被编辑器接纳（个别富文本内核/无头环境）：直接落 DOM 保内容——
+        // 草稿恢复宁可让用户看到再手工接管，也不能静默丢文
+        const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+        try { editor.innerHTML = paras.map(p => '<p>' + esc(p) + '</p>').join(''); } catch (e) {}
+    }
+    try { editor.dispatchEvent(new Event('input', { bubbles: true })); } catch (e) {}
+    return normLen() > 0;
+}
+
+// 草稿巡检（bootstrap 每 5s 调）。recovered 参数=当前页面生命是否为刷新/后退进入
+// （performance navigation type；测试可注入），此时空编辑器+有草稿才恢复，杜绝把提交后正常
+// 清空的编辑器重新填上旧文。
+function xaDraftWatchTick(recovered) {
+    if (recovered == null) {
+        try {
+            const nav = (performance.getEntriesByType('navigation')[0] || {});
+            recovered = nav.type === 'reload' || nav.type === 'back_forward';
+        } catch (e) { recovered = false; }
+    }
+    const roots = qsa('[class*="homework-question-editor"]');
+    if (!roots.length) return;
+    const store = xaDraftAll();
+    let dirty = false;
+    roots.forEach((root, idx) => {
+        const ed = root.querySelector('[data-slate-editor]')
+            || root.querySelector('div.w-e-text-container [contenteditable="true"]')
+            || root.querySelector('[contenteditable="true"]');
+        if (!ed) return;
+        const titleEl = root.querySelector('.topic-title');
+        const key = xaDraftKey((titleEl && titleEl.textContent) || 'idx' + idx);
+        const text = String(ed.textContent || '').replace(/\s+$/, '');
+        // 保存闸：AI 答题写入的内容不存草稿——否则提交后编辑器清空，风控自愈刷新会把
+        // 「已提交的答案」当草稿回填。确认模式的人工核对在 answering 复位后照常可存。
+        if (text.replace(/\s/g, '').length > 1) {
+            if (!XIA_AI.answering && !XIA_AI.answeringOnce && (!store[key] || store[key].text !== text)) {
+                store[key] = { text, at: Date.now(), title: String((titleEl && titleEl.textContent) || '').trim().slice(0, 40) };
+                dirty = true;
+            }
+        } else if (recovered && store[key] && store[key].text) {
+            const at = new Date(store[key].at).toLocaleTimeString();
+            if (xaDraftRestoreInto(ed, store[key].text)) {
+                XIA_AI.log(' 已恢复本地草稿（' + at + ' 保存' + (store[key].title ? '：' + store[key].title : '') + '），请核对内容', 'ok');
+                delete store[key];
+                dirty = true;
+            }
+        }
+    });
+    if (dirty) xaDraftStore(store);
+}
+
+// ==================== 暗色/护眼模式 ====================
+
+// Element Plus 走 CSS 变量整体换肤；平台布局里散落的硬编码浅色（.el-header #fff、.el-main #edf1fa、
+// .couresSideBox #fff、#app #f0f0f0——来自平台 CSS 实测）逐个补丁。样式常驻注入（#xa-dark-css），
+// html.xa-dark 类开关生效，conf.darkMode 由面板开关驱动。视频/图片不动（无 filter 反转）。
+// 首版覆盖面有限，真机截图迭代补漏。
+function xaDarkModeCSS() {
+    if (document.getElementById('xa-dark-css')) return;
+    const el = document.createElement('style');
+    el.id = 'xa-dark-css';
+    el.textContent = `html.xa-dark{--el-bg-color:#1d222b;--el-bg-color-page:#141821;--el-bg-color-overlay:#252b36;
+--el-text-color-primary:#e5eaf3;--el-text-color-regular:#cfd6e0;--el-text-color-secondary:#9aa3b2;
+--el-text-color-placeholder:#6b7280;--el-text-color-disabled:#555c68;
+--el-border-color:#3a4150;--el-border-color-light:#2e3542;--el-border-color-lighter:#2a303c;--el-border-color-extra-light:#252b36;
+--el-fill-color:#2a303c;--el-fill-color-light:#242a35;--el-fill-color-lighter:#20252f;--el-fill-color-extra-light:#1d222b;
+--el-fill-color-blank:#1d222b;--el-fill-color-dark:#2e3542;--el-fill-color-darker:#333a48;
+--el-mask-color:rgba(0,0,0,.65);}
+html.xa-dark body,html.xa-dark #app{background:#141821;color:#cfd6e0}
+html.xa-dark .el-main{background-color:#141821!important}
+html.xa-dark .el-container.teaching-layout .el-header,html.xa-dark .couresSideBox{background:#1d222b!important}
+html.xa-dark .couresSideBox-title,html.xa-dark .teaching-layout .header-mid .course-name{color:#e5eaf3!important}
+html.xa-dark .teaching-layout .header-rf a span{color:#9aa3b2!important}
+html.xa-dark .homework-question-editor,html.xa-dark .question-box,html.xa-dark .topic-title{color:#cfd6e0}
+html.xa-dark .w-e-text-container,html.xa-dark [class*="w-e-"]{background:#1d222b;color:#cfd6e0}
+html.xa-dark .w-e-text-container [contenteditable="true"]{color:#e5eaf3}`;
+    (document.head || document.documentElement).appendChild(el);
+}
+
+function xaApplyDarkMode() {
+    document.documentElement.classList.toggle('xa-dark', !!conf.darkMode);
+}
+
+// ==================== 降画质省性能 ====================
+
+// 平台本就有画质菜单（QualityDialog），切换属正常用户行为，不涉风控（风控管倍速/进度位置）。
+// 解码开销与分辨率直接挂钩：自动选最低档 = 大幅降解码 CPU 与带宽。走 video.js qualityLevels
+// API（vjs7 http-streaming 自带）；无多档画质（单 mp4）静默跳过。每元素只记一次日志。
+function xaApplyVideoEco(v) {
+    if (!conf.videoEco || v.__xaEcoDone) return;
+    try {
+        const p = v.player || (window.videojs && window.videojs.getPlayer ? window.videojs.getPlayer(v.id || '') : null);
+        if (!p || typeof p.qualityLevels !== 'function') return;
+        const ls = p.qualityLevels();
+        // 空列表不锁 done：HLS 清单可能晚于 loadedmetadata 解析，留待下次事件重试；
+        // 单 mp4 播放器列表恒空也只相当于每次换源多一次廉价探测
+        if (!ls || !ls.length) return;
+        let low = 0;
+        for (let i = 1; i < ls.length; i++) {
+            if ((ls[i].bitrate || ls[i].height || 0) < (ls[low].bitrate || ls[low].height || 0)) low = i;
+        }
+        for (let i = 0; i < ls.length; i++) { try { ls[i].enabled = (i === low); } catch (e) {} }
+        v.__xaEcoDone = true;
+        console.log('[芯位] 降画质省性能：已选最低档 ' + (ls[low].width || '?') + 'x' + (ls[low].height || '?'));
+    } catch (e) {}
+}
+
+// ==================== 作业/考试页防误关 ====================
+
+// hash 命中 homework|exam（sites.routeHasQuestions 同源判定）时挂 beforeunload。我们的自动化
+// 全走 DOM 点击（SPA hash 路由，不触发 beforeunload）；脚本自身发起的全页刷新（风控自愈 popup.js、
+// 视频卡死/解锁守望 autoplay.js）在 reload 前设 XIA_AI._allowLeaveAt 放行。3s 巡检跟随路由装卸。
+let _xaUnloadOn = false;
+function _xaUnloadHandler(e) {
+    if (Date.now() - (XIA_AI._allowLeaveAt || 0) < 5000) return;
+    e.preventDefault();
+    e.returnValue = '作业/考试内容可能未提交，确定离开？';
+}
+
+function xaUnloadGuardTick() {
+    const need = routeHasQuestions(location.hash);
+    if (need && !_xaUnloadOn) {
+        window.addEventListener('beforeunload', _xaUnloadHandler);
+        _xaUnloadOn = true;
+    } else if (!need && _xaUnloadOn) {
+        window.removeEventListener('beforeunload', _xaUnloadHandler);
+        _xaUnloadOn = false;
+    }
+}
+
+// ==================== 面板屏幕适配 ====================
+
+// 位置钳制纯函数：把 (x,y) 收回视口内（与拖拽路径同规则，下/右边界贴边、负坐标收 0）。
+// 拖拽过程中已有实时钳制，这里管的是「保存的定位在当前视口越界」——横竖旋转/窗口缩放后
+// 恢复面板定位时的共同实现。vw/vh 参数化供测试注入。
+function xaClampToViewport(x, y, w, h, vw, vh) {
+    const maxX = Math.max(0, vw - w), maxY = Math.max(0, vh - h);
+    return { x: Math.min(Math.max(x, 0), maxX), y: Math.min(Math.max(y, 0), maxY) };
 }

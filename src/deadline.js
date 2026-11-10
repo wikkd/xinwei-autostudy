@@ -114,8 +114,8 @@ function renderDeadlineBanner(summary) {
     };
     const urgent = items.some(i => i.level === 2);
     el.innerHTML = items.map(i =>
-        '<div>' + (i.level === 2 ? '🔴' : '🟠') + ' [' + esc(i.course) + '] ' + esc(i.title)
-        + ' — 截止 ' + when(i.end) + (i.level === 2 ? '（不足 24 小时！）' : '') + '</div>').join('');
+        '<div>[' + esc(i.course) + '] ' + esc(i.title)
+        + ' — 截止 ' + when(i.end) + (i.level === 2 ? '（不足 24 小时！）' : '（临近截止）') + '</div>').join('');
     el.style.display = '';
     el.className = 'xa-deadline' + (urgent ? ' urgent' : '');
 }
@@ -142,7 +142,7 @@ function deadlineCheck(force) {
         if (items.length && key !== _dlLastLogged) { // 同一批不重复刷日志
             _dlLastLogged = key;
             const urgent = items.filter(i => i.level === 2).length;
-            XIA_AI.log('⏰ ' + items.length + ' 份作业临近截止' + (urgent ? '（其中 ' + urgent + ' 份不足 24 小时！）' : '')
+            XIA_AI.log(' ' + items.length + ' 份作业临近截止' + (urgent ? '（其中 ' + urgent + ' 份不足 24 小时！）' : '')
                 + '，详见面板提醒', urgent ? 'error' : 'info');
             if (urgent) xaNotify('deadline', '作业即将截止', urgent + ' 份作业不足 24 小时截止，请尽快处理（详见面板横幅）');
         }

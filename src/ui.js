@@ -1,7 +1,7 @@
 // ==================== 悬浮控制面板 UI ====================
 
 const PANEL_CSS = `
-#xa-panel{position:fixed;top:16px;left:16px;width:300px;background:#fff;border-radius:14px;
+#xa-panel{position:fixed;top:16px;left:16px;width:min(300px, calc(100vw - 20px));background:#fff;border-radius:14px;
   box-shadow:0 10px 32px rgba(0,0,0,.14),0 2px 8px rgba(0,0,0,.06);z-index:99999;
   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden;transition:opacity .25s,transform .25s;}
 #xa-panel.xa-hidden{opacity:0;transform:scale(.85);pointer-events:none;}
@@ -14,7 +14,7 @@ const PANEL_CSS = `
 .xa-tab{flex:1;padding:9px 4px;font-size:12px;font-weight:600;color:#6b7280;text-align:center;cursor:pointer;transition:all .15s;border-bottom:2px solid transparent;}
 .xa-tab:hover{color:#3b82f6;}
 .xa-tab.active{color:#3b82f6;border-bottom-color:#3b82f6;background:#fff;}
-.xa-body{padding:14px;display:flex;flex-direction:column;gap:10px;max-height:640px;overflow-y:auto;}
+.xa-body{padding:14px;display:flex;flex-direction:column;gap:10px;max-height:min(640px, calc(100vh - 110px));overflow-y:auto;}
 .xa-tab-pane{display:none;flex-direction:column;gap:10px;}
 .xa-tab-pane.active{display:flex;}
 .xa-status{font-size:12px;color:#6b7280;text-align:center;padding:6px 8px;border-radius:6px;background:#f3f4f6;transition:color .2s,background .2s;}
@@ -99,7 +99,26 @@ function restorePos(el) {
     try {
         const all = JSON.parse(GM_getValue(SK.panelPos, '{}'));
         const p = all && all[el.id];
-        if (p && typeof p.l === 'number') { el.style.left = p.l + 'px'; el.style.top = p.t + 'px'; }
+        if (p && typeof p.l === 'number') {
+            el.style.left = p.l + 'px';
+            el.style.top = p.t + 'px';
+            clampPos(el, el.id === 'xa-mini' ? 44 : 300, el.id === 'xa-mini' ? 44 : 160);
+        }
+    } catch (e) {}
+}
+
+// 越界钳制：横竖旋转/窗口缩放后，保存的定位可能落在当前视口之外（面板"消失"）。
+// 显示中的元素量实际尺寸；隐藏的（迷你球 display:none）用兜底尺寸。变了才写回并落盘。
+function clampPos(el, fallbackW, fallbackH) {
+    try {
+        const l = parseInt(el.style.left) || 0, t = parseInt(el.style.top) || 0;
+        const p = xaClampToViewport(l, t, el.offsetWidth || fallbackW, el.offsetHeight || fallbackH,
+            window.innerWidth, window.innerHeight);
+        if (p.x !== l || p.y !== t) {
+            el.style.left = p.x + 'px';
+            el.style.top = p.y + 'px';
+            savePos(el);
+        }
     } catch (e) {}
 }
 function savePos(el) {
@@ -120,8 +139,8 @@ function buildPanel() {
     panel.innerHTML = `
 <div class="xa-header"><span>芯位网课辅助 <span id="xa-ver" style="opacity:.85;font-size:11px;font-weight:500;"></span></span><button class="xa-min-btn" title="最小化">−</button></div>
 <div class="xa-tabs">
-  <div class="xa-tab active" data-tab="cfg">⚙ 挂机</div>
-  <div class="xa-tab" data-tab="ai">🤖 答题</div>
+  <div class="xa-tab active" data-tab="cfg">挂机</div>
+  <div class="xa-tab" data-tab="ai">答题</div>
   <div class="xa-tab" data-tab="about">ℹ 关于</div>
 </div>
 <div class="xa-body">
@@ -134,8 +153,8 @@ function buildPanel() {
       <span style="font-size:12px;color:#374151;font-weight:600;">全自动刷课</span>
       <div class="xa-switch" id="xa-autoplay-switch" title="开启自动刷课"></div>
     </div>
-    <button class="xa-btn xa-mute">🔇 关闭静音</button>
-    <button class="xa-btn xa-stop" id="xa-deadline-btn" title="立即检查全部在学课程的未完成作业截止时间（平时每 30 分钟自动检查）">⏰ 检查作业截止</button>
+    <button class="xa-btn xa-mute">关闭静音</button>
+    <button class="xa-btn xa-stop" id="xa-deadline-btn" title="立即检查全部在学课程的未完成作业截止时间（平时每 30 分钟自动检查）">检查作业截止</button>
     <div class="xa-row" style="justify-content:space-between;">
       <span style="font-size:12px;color:#374151;font-weight:600;">后台桌面通知</span>
       <div class="xa-switch" id="xa-notify-switch" title="页面在后台时，巡航完成/待人工/配置熔断/截止临近等事件弹系统通知；前台不打扰，纯本地无网络外发"></div>
@@ -144,21 +163,29 @@ function buildPanel() {
       <span style="font-size:12px;color:#374151;font-weight:600;">运行时段</span>
       <input class="xa-input" id="xa-schedule" type="text" placeholder="HH:MM-HH:MM，空=全天" style="width:150px;padding:5px 8px;" title="仅在该时段内执行自动刷课/自动答题（支持跨零点如 23:00-07:00）。时段外自动功能暂停，手动操作不受影响。" />
     </div>
+    <div class="xa-row" style="justify-content:space-between;">
+      <span style="font-size:12px;color:#374151;font-weight:600;">暗色护眼</span>
+      <div class="xa-switch" id="xa-dark-switch" title="护眼暗色：覆盖平台浅色变量与硬编码背景，视频/图片不受影响。首版覆盖面有限，漏网的刺眼区域欢迎截图反馈"></div>
+    </div>
+    <div class="xa-row" style="justify-content:space-between;">
+      <span style="font-size:12px;color:#374151;font-weight:600;">降画质省性能</span>
+      <div class="xa-switch" id="xa-eco-switch" title="每个视频自动选最低画质档：大幅降解码 CPU 与带宽（平台本就有画质菜单，切换属正常行为，不碰风控）。想看清视频时关闭"></div>
+    </div>
   </div>
   <!-- Tab 2: AI 答题 -->
   <div class="xa-tab-pane" data-pane="ai">
     <div class="xa-status" id="xa-ai-status"><span class="xa-led" id="xa-ai-led"></span><span id="xa-ai-status-text">等待配置 Key</span></div>
     <div class="xa-progress" id="xa-progress">待机中</div>
     <div class="xa-stats" id="xa-stats">已答 0 · 已提交 0</div>
-    <div class="xa-sec">🔌 接口配置</div>
+    <div class="xa-sec">接口配置</div>
     <div class="xa-ai-inputs">
       <input class="xa-input" id="xa-apikey" type="password" placeholder="API Key（sk-xxxxxxxx）" />
       <input class="xa-input" id="xa-apibase" type="text" placeholder="API Base（https://api.deepseek.com）" />
       <input class="xa-input" id="xa-model" type="text" placeholder="模型名（deepseek-reasoner / deepseek-chat / gpt-4o-mini）" />
       <input class="xa-input" id="xa-vision-model" type="text" placeholder="视觉模型（选填，题干带图时用，如 Qwen/Qwen2.5-VL-72B-Instruct）" />
     </div>
-    <button class="xa-btn xa-stop" id="xa-health" title="向当前端点发一条最小请求，测 Key / 模型名 / 连通性与延迟；只做检查，不改变运行状态">🔌 测试连接</button>
-    <div class="xa-sec">🔍 检索增强</div>
+    <button class="xa-btn xa-stop" id="xa-health" title="向当前端点发一条最小请求，测 Key / 模型名 / 连通性与延迟；只做检查，不改变运行状态">测试连接</button>
+    <div class="xa-sec">检索增强</div>
     <div class="xa-ai-inputs">
       <select class="xa-input" id="xa-search-mode">
         <option value="off">检索：关闭</option>
@@ -167,12 +194,12 @@ function buildPanel() {
       </select>
     </div>
     <div class="xa-btnrow">
-      <button class="xa-btn xa-once" id="xa-answer-once" title="只答当前这一题">🎯 答题</button>
-      <button class="xa-btn xa-stop" id="xa-cruise" title="打开本课程作业列表并自动逐份完成">🧭 巡航</button>
-      <button class="xa-btn xa-stop" id="xa-test-grab" title="测试题目抓取">🧪 抓取</button>
-      <button class="xa-btn xa-stop" id="xa-diagnose" title="dump 题目 DOM 结构">🩺 诊断</button>
+      <button class="xa-btn xa-once" id="xa-answer-once" title="只答当前这一题">答题</button>
+      <button class="xa-btn xa-stop" id="xa-cruise" title="打开本课程作业列表并自动逐份完成">巡航</button>
+      <button class="xa-btn xa-stop" id="xa-test-grab" title="测试题目抓取">抓取</button>
+      <button class="xa-btn xa-stop" id="xa-diagnose" title="dump 题目 DOM 结构">诊断</button>
     </div>
-    <div class="xa-sec">⚡ 自动模式</div>
+    <div class="xa-sec">自动模式</div>
     <div class="xa-row">
       <div class="xa-switch" id="xa-autoanswer-switch" title="开启自动答题+作业巡航"></div>
       <span style="font-size:12px;color:#374151;font-weight:600;">自动答题+跳题+作业巡航</span>
@@ -193,7 +220,7 @@ function buildPanel() {
   <!-- Tab 3: 关于 -->
   <div class="xa-tab-pane" data-pane="about">
     <div class="xa-about">
-      <h4>👋 关于本脚本</h4>
+      <h4>关于本脚本</h4>
       <p>本脚本以 <strong>MIT 协议</strong>开源发布，源码与构建流程完全公开，详见仓库 LICENSE 与 README。</p>
       <h4>1. 为什么没有内置 AI？</h4>
       <p>为了避免密钥泄露风险并长期维护，脚本采用<strong>【单机自填版】</strong>：你需要在面板里填写自己的大模型 API Key（如 DeepSeek、SiliconFlow 等）。脚本不会上报任何数据。</p>
@@ -206,7 +233,7 @@ function buildPanel() {
     </div>
   </div>
   <!-- 共享日志框 -->
-  <div class="xa-loghead"><span>📜 运行日志</span><span><button id="xa-copy-log">复制</button> <button id="xa-clear-log">清空</button></span></div>
+  <div class="xa-loghead"><span>运行日志</span><span><button id="xa-copy-log">复制</button> <button id="xa-clear-log">清空</button></span></div>
   <div class="xa-ai-log" id="xa-ai-log"><div style="color:#94a3b8;">等待操作...</div></div>
 </div>`;
     document.body.appendChild(panel);
@@ -220,6 +247,13 @@ function buildPanel() {
     mini.textContent = '芯';
     document.body.appendChild(mini);
     restorePos(mini);
+
+    // 屏幕适配：旋转/缩放窗口后把面板与迷你球收回视口（orientationchange 在部分浏览器
+    // 早于尺寸更新触发，延迟一拍再钳）。恢复定位路径已在 restorePos 内钳过。
+    let rszT = null;
+    const reClamp = () => { if (panel) clampPos(panel, 300, 160); if (mini) clampPos(mini, 44, 44); };
+    window.addEventListener('resize', () => { clearTimeout(rszT); rszT = setTimeout(reClamp, 200); });
+    window.addEventListener('orientationchange', () => setTimeout(reClamp, 350));
 }
 
 function makeDraggable(dragEl, handleEl) {
@@ -248,6 +282,40 @@ function makeDraggable(dragEl, handleEl) {
         dragEl.style.top = Math.max(0, Math.min(origTop + dy, maxY)) + 'px';
     });
     document.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        dragEl.style.cursor = '';
+        dragEl.style.transition = '';
+        if (moved) savePos(dragEl);
+    });
+
+    // 触屏拖拽（平板/触屏本）：与鼠标路径同一套状态机；move 阶段 preventDefault 阻止页面滚动，
+    // start 保持 passive 不阻塞默认行为
+    handleEl.addEventListener('touchstart', (e) => {
+        if (e.touches.length !== 1) return;
+        const t = e.touches[0];
+        if (t.target.closest('button, .xa-min-btn, .xa-switch, input, .xa-btn')) return;
+        dragging = true;
+        moved = false;
+        startX = t.clientX;
+        startY = t.clientY;
+        origLeft = parseInt(dragEl.style.left) || dragEl.getBoundingClientRect().left;
+        origTop = parseInt(dragEl.style.top) || dragEl.getBoundingClientRect().top;
+        dragEl.style.transition = 'none';
+    }, { passive: true });
+    document.addEventListener('touchmove', (e) => {
+        if (!dragging) return;
+        if (e.cancelable) e.preventDefault();
+        const t = e.touches[0];
+        const dx = t.clientX - startX;
+        const dy = t.clientY - startY;
+        if (dx || dy) moved = true;
+        const maxX = window.innerWidth - dragEl.offsetWidth;
+        const maxY = window.innerHeight - dragEl.offsetHeight;
+        dragEl.style.left = Math.max(0, Math.min(origLeft + dx, maxX)) + 'px';
+        dragEl.style.top = Math.max(0, Math.min(origTop + dy, maxY)) + 'px';
+    }, { passive: false });
+    document.addEventListener('touchend', () => {
         if (!dragging) return;
         dragging = false;
         dragEl.style.cursor = '';
@@ -322,9 +390,9 @@ function bindUI() {
         try {
             if (menuIds) menuIds.forEach(id => { try { GM_unregisterMenuCommand(id); } catch (e) {} });
             menuIds = [
-                GM_registerMenuCommand((conf.autoAnswer ? '⏸ 暂停自动答题' : '▶ 开启自动答题'), () => autoSwitch.click()),
-                GM_registerMenuCommand((conf.autoPlay ? '⏸ 暂停自动刷课' : '▶ 开启自动刷课'), () => playSwitch.click()),
-                GM_registerMenuCommand((panel.classList.contains('xa-hidden') ? '⬆ 展开面板' : '⬇ 最小化面板'), toggleMinimize),
+                GM_registerMenuCommand((conf.autoAnswer ? '暂停自动答题' : '开启自动答题'), () => autoSwitch.click()),
+                GM_registerMenuCommand((conf.autoPlay ? '暂停自动刷课' : '开启自动刷课'), () => playSwitch.click()),
+                GM_registerMenuCommand((panel.classList.contains('xa-hidden') ? '展开面板' : '最小化面板'), toggleMinimize),
             ];
         } catch (e) { menuIds = null; }
     }
@@ -449,6 +517,41 @@ function bindUI() {
         }
     }
 
+    // 暗色护眼开关：切 html.xa-dark 类（样式常驻注入，见 utils.xaDarkModeCSS）
+    const darkSwitch = $('#xa-dark-switch');
+    darkSwitch.addEventListener('click', () => {
+        conf.darkMode = !conf.darkMode;
+        GM_setValue(SK.darkMode, conf.darkMode);
+        xaApplyDarkMode();
+        refreshDarkSwitch();
+    });
+    function refreshDarkSwitch() {
+        if (conf.darkMode) {
+            darkSwitch.classList.add('on');
+            XIA_AI.log('暗色护眼已开启：浅色变量/硬编码背景已覆盖，漏网区域欢迎截图反馈', 'ok');
+        } else {
+            darkSwitch.classList.remove('on');
+            XIA_AI.log('暗色护眼已关闭', 'info');
+        }
+    }
+
+    // 降画质省性能开关：新视频自动选最低画质档（见 utils.xaApplyVideoEco）
+    const ecoSwitch = $('#xa-eco-switch');
+    ecoSwitch.addEventListener('click', () => {
+        conf.videoEco = !conf.videoEco;
+        GM_setValue(SK.videoEco, conf.videoEco);
+        refreshEcoSwitch();
+    });
+    function refreshEcoSwitch() {
+        if (conf.videoEco) {
+            ecoSwitch.classList.add('on');
+            XIA_AI.log('降画质省性能已开启：之后打开的视频自动选最低画质档', 'ok');
+        } else {
+            ecoSwitch.classList.remove('on');
+            XIA_AI.log('降画质省性能已关闭', 'info');
+        }
+    }
+
     // 挂机开关：独立控制主循环
     function refreshPlaySwitch() {
         if (conf.autoPlay) {
@@ -510,7 +613,7 @@ function bindUI() {
 
     // 截止检查按钮：立即拉取一次（跳过 30 分钟节流）
     $('#xa-deadline-btn').addEventListener('click', () => {
-        XIA_AI.log('⏰ 正在检查各课程作业截止时间…', 'info');
+        XIA_AI.log(' 正在检查各课程作业截止时间…', 'info');
         deadlineCheck(true);
     });
 
@@ -518,10 +621,10 @@ function bindUI() {
     $('#xa-health').addEventListener('click', e => {
         const b = e.currentTarget;
         b.disabled = true;
-        b.textContent = '🔌 测试中…';
+        b.textContent = '测试中…';
         XIA_AI.healthCheck((ok, info) => {
             b.disabled = false;
-            b.textContent = '🔌 测试连接';
+            b.textContent = '测试连接';
             info = info || {};
             setAIStatus(ok === true, ok ? '连接正常（' + (info.ms / 1000).toFixed(1) + 's）' : '连接失败：' + (info.why || '未知原因'));
         });
@@ -531,8 +634,8 @@ function bindUI() {
     const muteBtn = $('.xa-mute');
     muteBtn.addEventListener('click', () => {
         muteEnabled = !muteEnabled;
-        if (muteEnabled) { muteAll(); muteBtn.classList.remove('muted'); muteBtn.textContent = '🔇 关闭静音'; }
-        else { document.querySelectorAll('video, audio').forEach(v => { if (v.muted) v.muted = false; }); muteBtn.classList.add('muted'); muteBtn.textContent = '🔊 开启声音'; }
+        if (muteEnabled) { muteAll(); muteBtn.classList.remove('muted'); muteBtn.textContent = '关闭静音'; }
+        else { document.querySelectorAll('video, audio').forEach(v => { if (v.muted) v.muted = false; }); muteBtn.classList.add('muted'); muteBtn.textContent = '开启声音'; }
     });
 
     XIA_AI.bump(); // 初始化统计显示
@@ -541,5 +644,7 @@ function bindUI() {
     refreshSubmitSwitch();
     refreshConfirmSwitch();
     refreshNotifySwitch();
+    refreshDarkSwitch();
+    refreshEcoSwitch();
     refreshMenuCommands(); // 按当前开关状态挂油猴菜单（环境不支持时内部静默跳过）
 }

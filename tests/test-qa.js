@@ -63,6 +63,19 @@ window.eval(FILES.map(f => fs.readFileSync(path.join(SRC, f), 'utf8')).join('\n'
     schedGate: nowMin => xaScheduleGate(nowMin),
     schedGateReset: () => { _xaScheduleWasActive = true; },
     qImages: questionImages,
+    freezeAnim: xaFreezePageAnim,
+    portraitCSS: xaPortraitCSS,
+    draftKey: xaDraftKey,
+    draftAll: xaDraftAll,
+    draftStore: xaDraftStore,
+    draftTick: xaDraftWatchTick,
+    unloadTick: xaUnloadGuardTick,
+    unloadHandler: _xaUnloadHandler,
+    unloadState: () => _xaUnloadOn,
+    eco: xaApplyVideoEco,
+    darkCSS: xaDarkModeCSS,
+    darkApply: xaApplyDarkMode,
+    clamp: xaClampToViewport,
 };`);
 window.loadCfg(); // 必须在解构前：loadCfg 会整体重赋值 conf，之后 getter 才返回最终对象
 const { conf, ai: XIA_AI, tools: XA_TOOLS, markerTick, resetMarker } = window.__T;
@@ -137,7 +150,7 @@ function resetAI(confirmMode) {
     eq('确认模式：不自动跳题', nextClicked, 0);
     eq('确认模式：统计已答', XIA_AI.stats.answered, 1);
     const progress = window.document.getElementById('xa-progress').textContent;
-    eq('确认模式：进度提示待人工确认', progress.indexOf('⏸') === 0, true);
+    eq('确认模式：进度提示待人工确认', progress.indexOf('待') === 0, true);
     eq('确认模式：hash 保留（防同题重答）', typeof XIA_AI.lastQuestionHash, 'string');
     // 再扫一轮：同题不重答（hash 幂等），人工未操作前状态稳定
     const before = XIA_AI.stats.answered;
@@ -368,13 +381,13 @@ function subjectiveFixture(opts) {
     window.document.querySelector('.toggle-button').addEventListener('click', () => nextClicked++);
     XIA_AI.scan();
     eq('图片回归：AI 失败回退跳过记录', called, 1);
-    eq('图片回归：回退时提示人工', window.document.getElementById('xa-progress').textContent.indexOf('🖼️'), 0);
+    eq('图片回归：回退时提示人工', window.document.getElementById('xa-progress').textContent.indexOf('待人工处理：图片题已跳过'), 0);
     eq('图片回归：回退时尝试跳下一题', nextClicked, 1);
     XIA_AI.lastQuestionHash = ''; // 人工未处理，模拟下一轮重扫（跳过记录已落 GM）
     XIA_AI.callAI = () => { called++; };
     XIA_AI.scan();
     eq('图片回归：已跳过的真题不再调 AI', called, 1);
-    eq('图片回归：已跳过的真题仍提示人工', window.document.getElementById('xa-progress').textContent.indexOf('🖼️'), 0);
+    eq('图片回归：已跳过的真题仍提示人工', window.document.getElementById('xa-progress').textContent.indexOf('待人工处理：图片题已跳过'), 0);
     eq('图片回归：已跳过的真题不重复跳题（2.5s 节流）', nextClicked, 1);
 }
 
@@ -780,6 +793,147 @@ function codeChoiceFixture(id) {
 
     window.__T.conf.apiKey = '';
     window.GM_xmlhttpRequest = () => {};
+}
+
+// ===== ㉓ 页面动画冻结：规则齐全、幂等、保留事件回调的写法 =====
+{
+    window.__T.freezeAnim();
+    window.__T.freezeAnim(); // 幂等：重复注入只保留一份
+    const els = window.document.querySelectorAll('#xa-anim-freeze');
+    eq('动画冻结：重复注入只保留一份', els.length, 1);
+    const css = els[0].textContent || '';
+    ok('动画冻结：压时长不压名（不用 animation:none，事件回调不挂死）',
+        css.indexOf('animation-duration:0.01ms') >= 0 && css.indexOf('animation:none') < 0);
+    ok('动画冻结：无限循环收敛为 1 次（防 0.01ms×∞ 迭代风暴）', css.indexOf('animation-iteration-count:1') >= 0);
+    ok('动画冻结：过渡同样近零', css.indexOf('transition-duration:0.01ms') >= 0);
+    ok('动画冻结：fill-mode 未被覆盖（forwards 入场动画能落到终态）', css.indexOf('fill-mode') < 0);
+}
+
+// ===== ㉔ 竖屏适配：≤1199px 生效、解锁硬墙、幂等、不隐藏目录 DOM =====
+{
+    window.__T.portraitCSS();
+    window.__T.portraitCSS(); // 幂等
+    const els = window.document.querySelectorAll('#xa-portrait-css');
+    eq('竖屏适配：重复注入只保留一份', els.length, 1);
+    const css = els[0].textContent || '';
+    ok('竖屏适配：仅窄视口生效（max-width:1199px）', css.indexOf('@media (max-width:1199px){') === 0);
+    ok('竖屏适配：解锁三处 min-width 硬墙', css.indexOf('min-width:0!important') >= 0);
+    ok('竖屏适配：头部收敛与主区留白', css.indexOf('.teaching-layout .el-header') >= 0 && css.indexOf('.el-main{padding:8px!important}') >= 0);
+    ok('竖屏适配：不用 display:none（自动跳章依赖目录 DOM）', css.indexOf('display:none') < 0);
+}
+
+// ===== ㉕ 主观题草稿防丢：key 稳定/容量/过期/巡检保存与恢复 =====
+{
+    const K = window.__T.draftKey;
+    ok('草稿：题干 key 稳定', K('论述题：请谈谈A') === K('论述题：请谈谈A') && K('论述题：请谈谈A') !== K('论述题：请谈谈B'));
+
+    // 容量 20 + 7 天过期：塞 25 条（含 1 条 8 天前的旧条目），落盘后只剩 20 条且旧的被剔
+    const store = {};
+    for (let i = 0; i < 24; i++) store['k' + i] = { text: 'T' + i, at: Date.now() - i * 1000 };
+    store.old = { text: '过期草稿', at: Date.now() - 8 * 24 * 3600 * 1000 };
+    window.__T.draftStore(store);
+    const kept = window.__T.draftAll();
+    ok('草稿：容量收敛到 20 且剔除过期', Object.keys(kept).length === 20 && !kept.old);
+
+    // 巡检：非空编辑器保存；live 清空不恢复；刷新恢复 + 草稿删除
+    window.document.body.innerHTML =
+        '<div class="homework-question-editor x1"><span class="topic-title">论述题A</span>'
+        + '<div class="w-e-text-container"><div contenteditable="true">第一段内容足够长不误判</div></div></div>';
+    window.__T.draftTick(false);
+    const key = K('论述题A');
+    ok('草稿：打字内容已入本地存储', !!(window.__T.draftAll()[key] && window.__T.draftAll()[key].text.indexOf('第一段') >= 0));
+
+    // AI 答题写入不存草稿：否则提交后自愈刷新会把「已提交的答案」当草稿回填
+    const beforeText = window.__T.draftAll()[key].text;
+    window.document.querySelector('[contenteditable]').textContent = 'AI写入的不同内容不应入库';
+    XIA_AI.answering = true;
+    window.__T.draftTick(false);
+    XIA_AI.answering = false;
+    ok('草稿：AI 答题写入不存草稿（防提交后误回填）', window.__T.draftAll()[key].text === beforeText);
+    window.__T.draftTick(false); // answering 复位后照常可存（确认模式人工核对场景）
+    ok('草稿：answering 复位后恢复保存', window.__T.draftAll()[key].text === 'AI写入的不同内容不应入库');
+
+    window.document.querySelector('[contenteditable]').innerHTML = '';
+    window.__T.draftTick(false);
+    ok('草稿：页面内正常清空（提交后）不回填', window.__T.draftAll()[key] != null);
+
+    window.__T.draftTick(true); // 模拟刷新/后退后的新页面生命
+    ok('草稿：刷新后空编辑器恢复草稿', (window.document.querySelector('[contenteditable]').textContent || '').indexOf('AI写入的不同内容') >= 0);
+    eq('草稿：恢复为一次性（草稿即删）', window.__T.draftAll()[key] == null, true);
+    window.document.body.innerHTML = '';
+}
+
+// ===== ㉖ 作业/考试页防误关：路由装卸 + beforeunload 拦截 + 自家刷新放行 =====
+{
+    const H = window.__T.unloadHandler;
+    window.location.hash = '#/homeworkDetailPage';
+    window.__T.unloadTick();
+    eq('防误关：作业路由武装', window.__T.unloadState(), true);
+    let ev = { pd: false, returnValue: '', preventDefault() { this.pd = true; } };
+    H(ev);
+    ok('防误关：beforeunload 拦截并带提示', ev.pd === true && ev.returnValue.indexOf('提交') >= 0);
+
+    XIA_AI._allowLeaveAt = Date.now(); // 风控自愈刷新放行
+    ev = { pd: false, returnValue: '', preventDefault() { this.pd = true; } };
+    H(ev);
+    ok('防误关：自家刷新 5s 内放行不拦', ev.pd === false);
+    XIA_AI._allowLeaveAt = 0;
+
+    window.location.hash = '#/videoLearn';
+    window.__T.unloadTick();
+    eq('防误关：离开作业路由卸载', window.__T.unloadState(), false);
+    window.location.hash = '';
+}
+
+// ===== ㉗ 暗色护眼 + 降画质省性能 =====
+{
+    window.__T.darkCSS();
+    window.__T.darkCSS(); // 幂等
+    eq('暗色：重复注入只保留一份', window.document.querySelectorAll('#xa-dark-css').length, 1);
+    const dcss = window.document.getElementById('xa-dark-css').textContent || '';
+    ok('暗色：EP 变量 + html.xa-dark 作用域', dcss.indexOf('html.xa-dark{--el-bg-color:') === 0 && dcss.indexOf('--el-bg-color-page:') >= 0);
+    ok('暗色：不 filter 反转（视频/图片原样）', dcss.indexOf('filter') < 0);
+
+    window.__T.conf.darkMode = false;
+    window.__T.darkApply();
+    ok('暗色：关=html 无 xa-dark 类', !window.document.documentElement.classList.contains('xa-dark'));
+    window.__T.conf.darkMode = true;
+    window.__T.darkApply();
+    ok('暗色：开=html 挂 xa-dark 类', window.document.documentElement.classList.contains('xa-dark'));
+    window.__T.conf.darkMode = false;
+
+    // 降画质：qualityLevels 探测 → 选最低码率档；关闭时不动作；幂等标记
+    const mkV = () => {
+        const ls = { length: 3, 0: { bitrate: 3000, height: 1080, enabled: false }, 1: { bitrate: 500, height: 360, enabled: false }, 2: { bitrate: 1500, height: 720, enabled: false } };
+        return { player: { qualityLevels: () => ls }, ls };
+    };
+    window.__T.conf.videoEco = true;
+    let v = mkV();
+    window.__T.eco(v);
+    ok('降画质：开=最低码率档启用', v.ls[1].enabled === true && v.ls[0].enabled === false && v.ls[2].enabled === false);
+    window.__T.conf.videoEco = false;
+    v = mkV();
+    window.__T.eco(v);
+    ok('降画质：关=不动画质', v.ls[0].enabled === false && v.ls[1].enabled === false);
+    window.__T.conf.videoEco = true;
+    v = mkV();
+    v.player.qualityLevels = () => ({ length: 0 }); // HLS 清单可能晚于 loadedmetadata 解析
+    window.__T.eco(v);
+    ok('降画质：空档位列表不锁 done（下次事件重试）', v.__xaEcoDone !== true);
+    window.__T.conf.videoEco = false;
+}
+
+// ===== ㉘ 面板屏幕适配：视口位置钳制纯函数 =====
+{
+    const C = window.__T.clamp;
+    const r1 = C(10, 10, 300, 200, 1280, 800);
+    ok('适配：视口内位置不动', r1.x === 10 && r1.y === 10);
+    const r2 = C(5000, 5000, 300, 200, 1280, 800);
+    ok('适配：越界拉回右/下边界', r2.x === 1280 - 300 && r2.y === 800 - 200);
+    const r3 = C(-50, -50, 300, 200, 1280, 800);
+    ok('适配：负坐标收 0', r3.x === 0 && r3.y === 0);
+    const r4 = C(10, 10, 3000, 4000, 1280, 800);
+    ok('适配：元素大于视口贴原点', r4.x === 0 && r4.y === 0);
 }
 
 console.log(fail ? ('\n' + fail + ' FAILED / ' + (pass + fail)) : ('✅ ' + pass + '/' + (pass + fail) + ' qa state-machine tests passed'));

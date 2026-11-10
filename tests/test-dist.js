@@ -58,6 +58,15 @@ const MUST = [
     'api.deepseek.com',
     // 桌面通知（GM_notification 授权 + 开关键 + 面板文案）与 LLM 瞬时故障降级链
     'GM_notification', 'xa_notify', '后台桌面通知', '降级重试',
+    // 页面动画冻结（utils.xaFreezePageAnim，bootstrap 默认启用）
+    'xa-anim-freeze', 'animation-duration:0.01ms', 'animation-iteration-count:1',
+    // 竖屏适配（utils.xaPortraitCSS，≤1199px 解锁 min-width 硬墙）
+    'xa-portrait-css', '@media (max-width:1199px){', 'min-width:0!important',
+    // 批 9：暗色护眼 / 降画质省性能 / 草稿防丢 / 防误关
+    'xa_dark_mode', 'xa_video_eco', 'xa_drafts', 'xa-dark-css', 'beforeunload',
+    '暗色护眼', '降画质省性能', '已恢复本地草稿', '作业/考试内容可能未提交',
+    // 批 11：面板屏幕适配（窄视口宽度/高度自适应、旋转恢复钳制、触屏拖拽）
+    'min(300px, calc(100vw - 20px))', 'min(640px, calc(100vh - 110px))', 'orientationchange', 'touchstart',
     // UI 文案（面板/日志/提交安全）
     '提交作业', '做作业', '下一题', '学习状态异常', '学习进度同步延迟', '请刷新页面后继续学习', '不允许倍速播放', '播放位置不合法',
     '课程背景', '踩分点',

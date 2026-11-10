@@ -33,12 +33,15 @@ const SK = {
     searchMode: 'xa_search_mode',
     schedule: 'xa_schedule',    // 运行时段表 HH:MM-HH:MM（可跨零点；空=全天），时段外自动刷课/答题暂停
     visionModel: 'xa_vision_model', // 视觉模型（选填）：题干带图时改走该模型看图作答；空=不带图纯文本作答
+    darkMode: 'xa_dark_mode',   // 暗色/护眼模式：html.xa-dark 类 + 平台浅色变量/硬编码背景覆盖
+    videoEco: 'xa_video_eco',   // 降画质省性能：每个视频自动选最低画质档（降解码 CPU 与带宽）
     panelPos: 'xa_panel_pos',   // 面板/迷你球拖动位置
     minimized: 'xa_minimized',  // 面板是否处于最小化
     lastReload: 'xa_last_reload_at', // 异常弹窗自动刷新的冷却时间戳
     unlockWatch: 'xa_unlock_watch_at', // 章节解锁守望：到点静默刷新复查开放状态的时间戳
     answerDelay: 'xa_answer_delay',  // 答题间隔秒数（0=不等待）
     imgSkipped: 'xa_img_skipped',    // 图片作答题跳过记录（hash→题干摘要）
+    drafts: 'xa_drafts',             // 主观题草稿防丢（题干 hash → {text,at,title}，上限 20 条 7 天过期，纯本地）
     deadlineLastAt: 'xa_deadline_last_at',   // 截止检查上次时间戳（30 分钟节流）
     deadlineSummary: 'xa_deadline_summary',  // 最近一次截止检查结果（刷新后横幅免请求展示）
 };
@@ -64,5 +67,7 @@ function loadCfg() {
         searchMode: g(SK.searchMode, CFG.DEFAULT_SEARCH_MODE),
         schedule: String(g(SK.schedule, '')).trim(),
         visionModel: String(g(SK.visionModel, '')).trim(),
+        darkMode: b(g(SK.darkMode, false)),
+        videoEco: b(g(SK.videoEco, false)),
     };
 }
