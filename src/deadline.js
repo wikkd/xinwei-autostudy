@@ -151,7 +151,7 @@ function deadlineCheck(force) {
 
 function initDeadlineWatch() {
     renderDeadlineBanner(); // 先用上次结果展示（免请求）
-    // 定时器 1 分钟轻驱动一次：30 分钟节流由 GM 时间戳把关；失败后的 5 分钟短重试也靠它到点触发
-    setInterval(() => { try { deadlineCheck(false); } catch (e) { console.log('[XIA-deadline] 异常', e); } }, 60000);
+    // 心跳 1 分钟轻驱动一次：30 分钟节流由 GM 时间戳把关；失败后的 5 分钟短重试也靠它到点触发
+    xaHeartbeat(() => { try { deadlineCheck(false); } catch (e) { console.log('[XIA-deadline] 异常', e); } }, 60000);
     deadlineCheck(false); // 启动即查（内部节流，30 分钟内不重复打接口）
 }

@@ -14,10 +14,6 @@ xaFreezePageAnim();
 // 竖屏适配：视口 ≤1199px 时解锁布局层 min-width:1200px 硬墙并收敛头部。见 utils.xaPortraitCSS
 xaPortraitCSS();
 
-// 暗色/护眼模式：样式常驻注入，conf.darkMode 决定 html.xa-dark 类。见 utils.xaDarkModeCSS
-xaDarkModeCSS();
-xaApplyDarkMode();
-
 // 构建并挂载 UI
 buildPanel();
 makeDraggable(panel, panel.querySelector('.xa-header'));
@@ -41,8 +37,10 @@ initPopupAutoReload();
 initMarkerQuestion();
 initDeadlineWatch();
 
-// 主观题草稿防丢（5s 轻扫，纯本地）+ 作业/考试页防误关（3s 跟随路由装卸 beforeunload）
-setInterval(xaDraftWatchTick, 5000);
-setInterval(xaUnloadGuardTick, 3000);
+// 常驻周期任务归一到单心跳（1s 驱动，各任务自带周期与 gate）：草稿防丢 5s 轻扫（纯本地）、
+// 作业/考试页防误关 3s 跟随路由装卸；风控弹窗/弹题/截止提醒在各自 init 里注册
+xaHeartbeat(xaDraftWatchTick, 5000);
+xaHeartbeat(xaUnloadGuardTick, 3000);
+setInterval(xaHeartTick, 1000);
 
-console.log('[XinweiAutoStudy] 已加载 v__XA_VERSION__');
+console.log('[XinweiAutoStudy] 已加载 v__XA_VERSION__ (build __XA_BUILD__)');

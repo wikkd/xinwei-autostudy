@@ -509,6 +509,8 @@ function xaDraftRestoreInto(editor, text) {
 // （performance navigation type；测试可注入），此时空编辑器+有草稿才恢复，杜绝把提交后正常
 // 清空的编辑器重新填上旧文。
 function xaDraftWatchTick(recovered) {
+    // 路由闸：主观题编辑器只存在于作业/考试路由，其余页面（视频/课程页）连 qsa 都省掉
+    if (!routeHasQuestions(location.hash)) return;
     if (recovered == null) {
         try {
             const nav = (performance.getEntriesByType('navigation')[0] || {});
@@ -546,47 +548,15 @@ function xaDraftWatchTick(recovered) {
     if (dirty) xaDraftStore(store);
 }
 
-// ==================== 暗色/护眼模式 ====================
-
-// Element Plus 走 CSS 变量整体换肤；平台布局里散落的硬编码浅色（.el-header #fff、.el-main #edf1fa、
-// .couresSideBox #fff、#app #f0f0f0——来自平台 CSS 实测）逐个补丁。样式常驻注入（#xa-dark-css），
-// html.xa-dark 类开关生效，conf.darkMode 由面板开关驱动。视频/图片不动（无 filter 反转）。
-// 首版覆盖面有限，真机截图迭代补漏。
-function xaDarkModeCSS() {
-    if (document.getElementById('xa-dark-css')) return;
-    const el = document.createElement('style');
-    el.id = 'xa-dark-css';
-    el.textContent = `html.xa-dark{--el-bg-color:#1d222b;--el-bg-color-page:#141821;--el-bg-color-overlay:#252b36;
---el-text-color-primary:#e5eaf3;--el-text-color-regular:#cfd6e0;--el-text-color-secondary:#9aa3b2;
---el-text-color-placeholder:#6b7280;--el-text-color-disabled:#555c68;
---el-border-color:#3a4150;--el-border-color-light:#2e3542;--el-border-color-lighter:#2a303c;--el-border-color-extra-light:#252b36;
---el-fill-color:#2a303c;--el-fill-color-light:#242a35;--el-fill-color-lighter:#20252f;--el-fill-color-extra-light:#1d222b;
---el-fill-color-blank:#1d222b;--el-fill-color-dark:#2e3542;--el-fill-color-darker:#333a48;
---el-mask-color:rgba(0,0,0,.65);}
-html.xa-dark body,html.xa-dark #app{background:#141821;color:#cfd6e0}
-html.xa-dark .el-main{background-color:#141821!important}
-html.xa-dark .el-container.teaching-layout .el-header,html.xa-dark .couresSideBox{background:#1d222b!important}
-html.xa-dark .couresSideBox-title,html.xa-dark .teaching-layout .header-mid .course-name{color:#e5eaf3!important}
-html.xa-dark .teaching-layout .header-rf a span{color:#9aa3b2!important}
-html.xa-dark .homework-question-editor,html.xa-dark .question-box,html.xa-dark .topic-title{color:#cfd6e0}
-html.xa-dark .w-e-text-container,html.xa-dark [class*="w-e-"]{background:#1d222b;color:#cfd6e0}
-html.xa-dark .w-e-text-container [contenteditable="true"]{color:#e5eaf3}`;
-    (document.head || document.documentElement).appendChild(el);
-}
-
-function xaApplyDarkMode() {
-    document.documentElement.classList.toggle('xa-dark', !!conf.darkMode);
-}
-
 // ==================== 降画质省性能 ====================
 
 // 平台本就有画质菜单（QualityDialog），切换属正常用户行为，不涉风控（风控管倍速/进度位置）。
 // 解码开销与分辨率直接挂钩：自动选最低档 = 大幅降解码 CPU 与带宽。走 video.js qualityLevels
 // API（vjs7 http-streaming 自带）；无多档画质（单 mp4）静默跳过。每元素只记一次日志。
-function xaApplyVideoEco(v) {
+function xaApplyVideoEco(v, p) {
     if (!conf.videoEco || v.__xaEcoDone) return;
     try {
-        const p = v.player || (window.videojs && window.videojs.getPlayer ? window.videojs.getPlayer(v.id || '') : null);
+        p = p || v.player || (window.videojs && window.videojs.getPlayer ? window.videojs.getPlayer(v.id || '') : null);
         if (!p || typeof p.qualityLevels !== 'function') return;
         const ls = p.qualityLevels();
         // 空列表不锁 done：HLS 清单可能晚于 loadedmetadata 解析，留待下次事件重试；
@@ -599,6 +569,63 @@ function xaApplyVideoEco(v) {
         for (let i = 0; i < ls.length; i++) { try { ls[i].enabled = (i === low); } catch (e) {} }
         v.__xaEcoDone = true;
         console.log('[芯位] 降画质省性能：已选最低档 ' + (ls[low].width || '?') + 'x' + (ls[low].height || '?'));
+    } catch (e) {}
+}
+
+// ==================== 智能倍速 ====================
+
+// 平台对部分课程开放倍速菜单（video.js PlaybackRateMenuButton，0.5x-2x 档位，实拍菜单实证）。
+// 「自动判断」以菜单为准：有菜单 = 平台明确允许，走它自己的菜单项点击切到最高档（>2x 永不，铁律）；
+// 无菜单或档位全部 ≤1x = 该视频不允许倍速，绝不直接写 playbackRate（避免「不允许倍速播放」风控）。
+// 弹过风控文案后 30 分钟内不再尝试（popup.js 落 GM 时间戳），防止自愈刷新→再切→再刷新死循环。
+// 每元素一次性（__xaSpeedDone），平台若中途压回 1x 不反复抢——对抗式重试只会放大风控暴露面。
+function xaApplySpeedBoost(v, p) {
+    if (!conf.speedBoost || v.__xaSpeedDone) return;
+    if (Date.now() - Number(GM_getValue(SK.speedRejectAt, 0)) < 1800000) return;
+    try {
+        p = p || v.player || (window.videojs && window.videojs.getPlayer ? window.videojs.getPlayer(v.id || '') : null);
+        if (!p) return; // 播放器未就绪：loadedmetadata/play 事件再兜底
+        const root = v.closest('.video-js') || v.parentElement;
+        let items = root ? qsa('.vjs-playback-rate .vjs-menu-item', root) : [];
+        if (!items.length && root) {
+            // 自定义皮肤兜底：类名含 rate/speed 的容器里文本恰为「Nx」的菜单项（避免误点其它控件）
+            items = qsa('[class*="rate"] [class*="item"],[class*="speed"] [class*="item"]', root)
+                .filter(el => /^(\d+(\.\d+)?)x$/i.test(String(el.textContent || '').trim()));
+        }
+        if (!items.length) { v.__xaSpeedDone = true; return; } // 无倍速菜单：该视频不允许，不再探测
+        let top = 0;
+        for (let i = 0; i < items.length; i++) {
+            const r = parseFloat(String(items[i].textContent || '')) || 0;
+            if (r > top && r <= 2) top = r;
+        }
+        let cur = 1;
+        try { cur = p.playbackRate() || 1; } catch (e) {}
+        if (top <= 1 || top <= cur) { v.__xaSpeedDone = true; return; }
+        let hit = null;
+        for (let i = 0; i < items.length; i++) {
+            if (parseFloat(String(items[i].textContent || '')) === top) { hit = items[i]; break; }
+        }
+        if (hit) { try { hit.click(); } catch (e) {} }
+        try {
+            if (Math.abs((p.playbackRate() || 1) - top) > 0.01) p.playbackRate(top); // 点击未生效的 API 兜底
+        } catch (e) {}
+        v.__xaSpeedDone = true;
+        console.log('[芯位] 智能倍速：已切到最高档 ' + top + 'x');
+    } catch (e) {}
+}
+
+// ==================== 视频优化统一入口 ====================
+
+// 降画质与智能倍速都要先解析 videojs player：autoplay 的 loadedmetadata/play 事件只挂这一个入口，
+// 事件监听与 player 查找减半。子功能的一次性标记（__xaEcoDone/__xaSpeedDone）与 30 分钟冷却互不影响；
+// play 事件额外多出的降画质重试无副作用（空档位列表本来就是廉价探测，选完档后一次性标记直接短路）。
+function xaApplyVideoTweaks(v) {
+    if (!conf.videoEco && !conf.speedBoost) return;
+    try {
+        const p = v.player || (window.videojs && window.videojs.getPlayer ? window.videojs.getPlayer(v.id || '') : null);
+        if (!p) return; // 播放器未就绪：后续媒体事件再兜底
+        if (conf.videoEco) xaApplyVideoEco(v, p);
+        if (conf.speedBoost) xaApplySpeedBoost(v, p);
     } catch (e) {}
 }
 
@@ -623,6 +650,37 @@ function xaUnloadGuardTick() {
         window.removeEventListener('beforeunload', _xaUnloadHandler);
         _xaUnloadOn = false;
     }
+}
+
+// ==================== 心跳调度（常驻定时器归一）====================
+
+// 全脚本常驻周期任务（风控弹窗检测/弹题巡检/草稿巡检/防误关装卸/截止提醒/AI 扫描闸）收敛到
+// 单心跳：后台标签页里 Chrome 本来就把所有定时器钳到约 1 次/分钟，多定时器并不会更勤快，
+// 只多占句柄；单心跳让任务异常互不影响（逐个 try/catch）、gate 化启停、调度集中可见。
+// 注册即排期（next = now + period，首跳行为与独立 setInterval 一致）；xaHeartTick(now) 的
+// now 可注入供测试。真正 start/stop 生命周期的主循环（mainTick）不并入。
+const _xaHeartTasks = [];
+function xaHeartbeat(fn, periodMs, gate) {
+    _xaHeartTasks.push({ fn: fn, periodMs: periodMs, gate: gate || null, next: Date.now() + periodMs });
+}
+function xaHeartTick(now) {
+    const t = typeof now === 'number' ? now : Date.now();
+    for (let i = 0; i < _xaHeartTasks.length; i++) {
+        const task = _xaHeartTasks[i];
+        if (t < task.next || (task.gate && !task.gate())) continue;
+        task.next = t + task.periodMs;
+        try { task.fn(); } catch (e) {}
+    }
+}
+
+// ==================== 进度行保护（前缀单一来源）====================
+
+// 面板进度行上「关键状态」的判定：挂机主循环不得覆盖这些行。前缀单一来源——
+// autoplay mainTick 与测试共用；不能用裸「待」判定（初始文本「待机中」会被误伤，
+// 批 12 审查实锤过）。进度文案新增关键状态时在这里登记前缀。
+function xaProgressBlocked(ptxt) {
+    ptxt = String(ptxt || '');
+    return ptxt.indexOf('等待') === 0 || ptxt.indexOf('待人工') === 0 || ptxt.indexOf('配置错误') === 0;
 }
 
 // ==================== 面板屏幕适配 ====================

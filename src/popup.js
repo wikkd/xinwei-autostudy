@@ -18,6 +18,7 @@ function initPopupAutoReload() {
     let slowAt = 0, slowSweeps = 0;
     const trigger = hit => {
         GM_setValue(SK.lastReload, Date.now());
+        if (hit === '不允许倍速播放') GM_setValue(SK.speedRejectAt, Date.now()); // 智能倍速 30 分钟冷却锚点（utils.xaApplySpeedBoost 读）
         console.log('[芯位] 检测到平台风控弹窗（' + hit + '），3秒后自动刷新页面');
         xaNotify('risk', '检测到平台风控提示', '「' + hit + '」，3 秒后自动刷新页面续跑'); // 通知与页面刷新互不影响（系统级）
         setTimeout(() => {
@@ -25,7 +26,7 @@ function initPopupAutoReload() {
             location.reload();
         }, 3000);
     };
-    setInterval(() => {
+    xaHeartbeat(() => {
         const last = Number(GM_getValue(SK.lastReload, 0));
         if (Date.now() - last < RELOAD_COOLDOWN) return;
         // 快路径：可见弹窗/浮层的局部文本（只对已打开的少数节点读 innerText）；
@@ -59,7 +60,7 @@ function initPopupAutoReload() {
 //   浮层期间 keepPlay/卡死看门狗已避让（utils.interactiveOverlay 覆盖 .el-dialog）。
 let _mqKey = '', _mqState = '', _mqFails = {};
 function initMarkerQuestion() {
-    setInterval(() => {
+    xaHeartbeat(() => {
         try { markerQuestionTick(); } catch (e) { console.log('[XIA-marker] 异常', e); }
     }, 2500);
 }

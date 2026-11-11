@@ -45,6 +45,12 @@ const PANEL_CSS = `
 .xa-switch::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
   background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:transform .2s;}
 .xa-switch.on::after{transform:translateX(20px);}
+.xa-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+.xa-cell{display:flex;align-items:center;justify-content:space-between;gap:6px;background:#f8fafc;
+  border:1px solid #e2e8f0;border-radius:8px;padding:7px 9px;transition:background .2s,border-color .2s;}
+.xa-cell.on{background:#ecfdf5;border-color:#a7f3d0;}
+.xa-cell span{font-size:11px;color:#374151;font-weight:600;}
+.xa-cell.wide{grid-column:span 2;}
 .xa-led{display:inline-block;width:8px;height:8px;border-radius:50%;background:#9ca3af;margin-right:6px;vertical-align:middle;}
 .xa-led.ok{background:#10b981;box-shadow:0 0 6px rgba(16,185,129,.6);}
 .xa-led.err{background:#dc2626;}
@@ -59,7 +65,14 @@ const PANEL_CSS = `
   box-shadow:0 4px 16px rgba(59,130,246,.35);transition:transform .2s;user-select:none;}
 #xa-mini:hover{transform:scale(1.1);}
 #xa-mini.show{display:flex;}
-.xa-sec{font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:.5px;margin:2px 0 -2px;}
+.xa-drawer{display:flex;flex-direction:column;gap:10px;}
+.xa-drawer-b{display:flex;flex-direction:column;gap:10px;}
+.xa-drawer.closed .xa-drawer-b{display:none;}
+.xa-sec{font-size:11px;color:#94a3b8;font-weight:700;letter-spacing:.5px;cursor:pointer;user-select:none;
+  display:flex;align-items:center;margin:2px 0 -2px;}
+.xa-sec::after{content:"";width:6px;height:6px;border-right:2px solid #94a3b8;border-bottom:2px solid #94a3b8;
+  transform:rotate(45deg);transition:transform .2s;margin-left:6px;flex-shrink:0;}
+.xa-drawer.closed .xa-sec::after{transform:rotate(-45deg);}
 .xa-btnrow{display:flex;gap:8px;}
 .xa-btnrow .xa-btn{flex:1;padding:8px 0;font-size:12px;letter-spacing:0;}
 .xa-progress{font-size:11px;color:#2563eb;background:#eff6ff;border:1px solid #dbeafe;border-radius:8px;
@@ -92,6 +105,13 @@ function setAIStatus(type, text) {
     else if (type === false) aiLed.className = 'xa-led err';
     else aiLed.className = 'xa-led';
     aiStatusText.textContent = text || '';
+}
+
+// 开关视觉统一出口：滑块与所在卡片格子（.xa-cell）联动高亮——开启时卡片绿底，一眼可辨全部生效中的功能
+function setSwitch(el, on) {
+    el.classList.toggle('on', !!on);
+    const cell = el.closest('.xa-cell, .xa-row');
+    if (cell) cell.classList.toggle('on', !!on);
 }
 
 // 面板/迷你球位置持久化（按元素 id 分别记录）
@@ -141,80 +161,122 @@ function buildPanel() {
 <div class="xa-tabs">
   <div class="xa-tab active" data-tab="cfg">挂机</div>
   <div class="xa-tab" data-tab="ai">答题</div>
-  <div class="xa-tab" data-tab="about">ℹ 关于</div>
+  <div class="xa-tab" data-tab="about">关于</div>
 </div>
 <div class="xa-body">
-  <!-- Tab 1: 挂机配置 -->
+  <!-- Tab 1: 挂机（自动执行 / 视频优化 / 计划与提醒 / 声音与检查，抽屉式折叠） -->
   <div class="xa-tab-pane active" data-pane="cfg">
     <div class="xa-status" id="xa-status">状态：就绪</div>
     <div class="xa-stats" id="xa-course-progress" style="display:none;"></div>
     <div class="xa-deadline" id="xa-deadline" style="display:none;"></div>
-    <div class="xa-row" style="justify-content:space-between;">
-      <span style="font-size:12px;color:#374151;font-weight:600;">全自动刷课</span>
-      <div class="xa-switch" id="xa-autoplay-switch" title="开启自动刷课"></div>
+    <div class="xa-drawer" data-sec="auto">
+      <div class="xa-sec">自动执行</div>
+      <div class="xa-drawer-b">
+        <div class="xa-grid">
+          <div class="xa-cell wide"><span>全自动刷课</span>
+            <div class="xa-switch" id="xa-autoplay-switch" title="开启自动刷课：自动播放视频/翻章节/整页静音挂后台"></div>
+          </div>
+        </div>
+      </div>
     </div>
-    <button class="xa-btn xa-mute">关闭静音</button>
-    <button class="xa-btn xa-stop" id="xa-deadline-btn" title="立即检查全部在学课程的未完成作业截止时间（平时每 30 分钟自动检查）">检查作业截止</button>
-    <div class="xa-row" style="justify-content:space-between;">
-      <span style="font-size:12px;color:#374151;font-weight:600;">后台桌面通知</span>
-      <div class="xa-switch" id="xa-notify-switch" title="页面在后台时，巡航完成/待人工/配置熔断/截止临近等事件弹系统通知；前台不打扰，纯本地无网络外发"></div>
+    <div class="xa-drawer" data-sec="video">
+      <div class="xa-sec">视频优化</div>
+      <div class="xa-drawer-b">
+        <div class="xa-grid">
+          <div class="xa-cell"><span>智能倍速</span>
+            <div class="xa-switch" id="xa-speed-switch" title="自动识别平台倍速菜单（0.5x-2x）：有菜单的视频自动点选最高档，绝不超 2x；无菜单的视频不碰。触发「不允许倍速播放」后 30 分钟内不再尝试"></div>
+          </div>
+          <div class="xa-cell"><span>降画质省性能</span>
+            <div class="xa-switch" id="xa-eco-switch" title="每个视频自动选最低画质档：大幅降解码 CPU 与带宽（平台本就有画质菜单，切换属正常行为，不碰风控）。想看清视频时关闭"></div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="xa-row" style="justify-content:space-between;">
-      <span style="font-size:12px;color:#374151;font-weight:600;">运行时段</span>
-      <input class="xa-input" id="xa-schedule" type="text" placeholder="HH:MM-HH:MM，空=全天" style="width:150px;padding:5px 8px;" title="仅在该时段内执行自动刷课/自动答题（支持跨零点如 23:00-07:00）。时段外自动功能暂停，手动操作不受影响。" />
+    <div class="xa-drawer" data-sec="plan">
+      <div class="xa-sec">计划与提醒</div>
+      <div class="xa-drawer-b">
+        <div class="xa-grid">
+          <div class="xa-cell"><span>后台桌面通知</span>
+            <div class="xa-switch" id="xa-notify-switch" title="页面在后台时，巡航完成/待人工/配置熔断/截止临近等事件弹系统通知；前台不打扰，纯本地无网络外发"></div>
+          </div>
+        </div>
+        <div class="xa-row" style="justify-content:space-between;">
+          <span style="font-size:12px;color:#374151;font-weight:600;">运行时段</span>
+          <input class="xa-input" id="xa-schedule" type="text" placeholder="HH:MM-HH:MM，空=全天" style="width:150px;padding:5px 8px;" title="仅在该时段内执行自动刷课/自动答题（支持跨零点如 23:00-07:00）。时段外自动功能暂停，手动操作不受影响。" />
+        </div>
+      </div>
     </div>
-    <div class="xa-row" style="justify-content:space-between;">
-      <span style="font-size:12px;color:#374151;font-weight:600;">暗色护眼</span>
-      <div class="xa-switch" id="xa-dark-switch" title="护眼暗色：覆盖平台浅色变量与硬编码背景，视频/图片不受影响。首版覆盖面有限，漏网的刺眼区域欢迎截图反馈"></div>
-    </div>
-    <div class="xa-row" style="justify-content:space-between;">
-      <span style="font-size:12px;color:#374151;font-weight:600;">降画质省性能</span>
-      <div class="xa-switch" id="xa-eco-switch" title="每个视频自动选最低画质档：大幅降解码 CPU 与带宽（平台本就有画质菜单，切换属正常行为，不碰风控）。想看清视频时关闭"></div>
+    <div class="xa-drawer" data-sec="quick">
+      <div class="xa-sec">声音与检查</div>
+      <div class="xa-drawer-b">
+        <div class="xa-btnrow">
+          <button class="xa-btn xa-mute">关闭静音</button>
+          <button class="xa-btn xa-stop" id="xa-deadline-btn" title="立即检查全部在学课程的未完成作业截止时间（平时每 30 分钟自动检查）">检查作业截止</button>
+        </div>
+      </div>
     </div>
   </div>
-  <!-- Tab 2: AI 答题 -->
+  <!-- Tab 2: 答题（接口 / 自动模式 / 检索增强 / 工具，抽屉式折叠） -->
   <div class="xa-tab-pane" data-pane="ai">
     <div class="xa-status" id="xa-ai-status"><span class="xa-led" id="xa-ai-led"></span><span id="xa-ai-status-text">等待配置 Key</span></div>
     <div class="xa-progress" id="xa-progress">待机中</div>
     <div class="xa-stats" id="xa-stats">已答 0 · 已提交 0</div>
-    <div class="xa-sec">接口配置</div>
-    <div class="xa-ai-inputs">
-      <input class="xa-input" id="xa-apikey" type="password" placeholder="API Key（sk-xxxxxxxx）" />
-      <input class="xa-input" id="xa-apibase" type="text" placeholder="API Base（https://api.deepseek.com）" />
-      <input class="xa-input" id="xa-model" type="text" placeholder="模型名（deepseek-reasoner / deepseek-chat / gpt-4o-mini）" />
-      <input class="xa-input" id="xa-vision-model" type="text" placeholder="视觉模型（选填，题干带图时用，如 Qwen/Qwen2.5-VL-72B-Instruct）" />
+    <div class="xa-drawer" data-sec="api">
+      <div class="xa-sec">接口配置</div>
+      <div class="xa-drawer-b">
+        <div class="xa-ai-inputs">
+          <input class="xa-input" id="xa-apikey" type="password" placeholder="API Key（sk-xxxxxxxx）" />
+          <input class="xa-input" id="xa-apibase" type="text" placeholder="API Base（https://api.deepseek.com）" />
+          <input class="xa-input" id="xa-model" type="text" placeholder="模型名（deepseek-reasoner / deepseek-chat / gpt-4o-mini）" />
+          <input class="xa-input" id="xa-vision-model" type="text" placeholder="视觉模型（选填，题干带图时用，如 Qwen/Qwen2.5-VL-72B-Instruct）" />
+        </div>
+        <button class="xa-btn xa-stop" id="xa-health" title="向当前端点发一条最小请求，测 Key / 模型名 / 连通性与延迟；只做检查，不改变运行状态">测试连接</button>
+      </div>
     </div>
-    <button class="xa-btn xa-stop" id="xa-health" title="向当前端点发一条最小请求，测 Key / 模型名 / 连通性与延迟；只做检查，不改变运行状态">测试连接</button>
-    <div class="xa-sec">检索增强</div>
-    <div class="xa-ai-inputs">
-      <select class="xa-input" id="xa-search-mode">
-        <option value="off">检索：关闭</option>
-        <option value="auto">检索：自动（事实/时事题）</option>
-        <option value="always">检索：总是</option>
-      </select>
+    <div class="xa-drawer" data-sec="mode">
+      <div class="xa-sec">自动模式</div>
+      <div class="xa-drawer-b">
+        <div class="xa-grid">
+          <div class="xa-cell wide"><span>自动答题+作业巡航</span>
+            <div class="xa-switch" id="xa-autoanswer-switch" title="开启自动答题+跳题+作业巡航"></div>
+          </div>
+        </div>
+        <div class="xa-row" style="justify-content:space-between;">
+          <span style="font-size:12px;color:#374151;font-weight:600;">提交方式</span>
+          <select class="xa-input" id="xa-submit-mode" style="width:150px;padding:5px 8px;" title="manual=人工核对提交：AI 答完自动翻题，最后人工点提交；auto=全部答完后自动点提交作业（含未答题保护，影响真实成绩的高风险项）；confirm=AI 填完即暂停，人工核对后自行翻题/提交，脚本不代跳不代交（旧版「答完自动提交/答题确认」两开关合并而来）">
+            <option value="manual">人工核对提交</option>
+            <option value="auto">答完自动提交</option>
+            <option value="confirm">填完暂停待确认</option>
+          </select>
+        </div>
+        <div class="xa-row" style="justify-content:space-between;">
+          <span style="font-size:12px;color:#374151;font-weight:600;">答题间隔（秒）</span>
+          <input class="xa-input" id="xa-answer-delay" type="number" min="0" max="600" step="1" style="width:76px;padding:5px 8px;" title="每答完一题后等待的秒数再答下一题，0 = 不等待" />
+        </div>
+      </div>
     </div>
-    <div class="xa-btnrow">
-      <button class="xa-btn xa-once" id="xa-answer-once" title="只答当前这一题">答题</button>
-      <button class="xa-btn xa-stop" id="xa-cruise" title="打开本课程作业列表并自动逐份完成">巡航</button>
-      <button class="xa-btn xa-stop" id="xa-test-grab" title="测试题目抓取">抓取</button>
-      <button class="xa-btn xa-stop" id="xa-diagnose" title="dump 题目 DOM 结构">诊断</button>
+    <div class="xa-drawer" data-sec="search">
+      <div class="xa-sec">检索增强</div>
+      <div class="xa-drawer-b">
+        <div class="xa-ai-inputs">
+          <select class="xa-input" id="xa-search-mode">
+            <option value="off">检索：关闭</option>
+            <option value="auto">检索：自动（事实/时事题）</option>
+            <option value="always">检索：总是</option>
+          </select>
+        </div>
+      </div>
     </div>
-    <div class="xa-sec">自动模式</div>
-    <div class="xa-row">
-      <div class="xa-switch" id="xa-autoanswer-switch" title="开启自动答题+作业巡航"></div>
-      <span style="font-size:12px;color:#374151;font-weight:600;">自动答题+跳题+作业巡航</span>
-    </div>
-    <div class="xa-row">
-      <div class="xa-switch" id="xa-autosubmit-switch" title="全部答完后自动提交作业（含未答题保护）"></div>
-      <span style="font-size:12px;color:#374151;font-weight:600;">答完自动提交作业</span>
-    </div>
-    <div class="xa-row">
-      <div class="xa-switch" id="xa-confirm-switch" title="AI 填完答案即暂停：人工核对后自行翻题/提交，脚本不代跳不代交"></div>
-      <span style="font-size:12px;color:#374151;font-weight:600;">答题确认（填完暂停待核对）</span>
-    </div>
-    <div class="xa-row" style="justify-content:space-between;">
-      <span style="font-size:12px;color:#374151;font-weight:600;">答题间隔（秒）</span>
-      <input class="xa-input" id="xa-answer-delay" type="number" min="0" max="600" step="1" style="width:76px;padding:5px 8px;" title="每答完一题后等待的秒数再答下一题，0 = 不等待" />
+    <div class="xa-drawer" data-sec="tools">
+      <div class="xa-sec">工具</div>
+      <div class="xa-drawer-b">
+        <div class="xa-btnrow">
+          <button class="xa-btn xa-once" id="xa-answer-once" title="只答当前这一题">答题</button>
+          <button class="xa-btn xa-stop" id="xa-cruise" title="打开本课程作业列表并自动逐份完成">巡航</button>
+          <button class="xa-btn xa-stop" id="xa-test-grab" title="测试题目抓取">抓取</button>
+          <button class="xa-btn xa-stop" id="xa-diagnose" title="dump 题目 DOM 结构">诊断</button>
+        </div>
+      </div>
     </div>
   </div>
   <!-- Tab 3: 关于 -->
@@ -239,8 +301,9 @@ function buildPanel() {
     document.body.appendChild(panel);
     restorePos(panel);
     const ver = (typeof GM_info !== 'undefined' && GM_info && GM_info.script && GM_info.script.version) ? 'v' + GM_info.script.version : '';
+    // 构建戳：同一 @version 的本地构建肉眼可辨（面板安装验证用）
     const verEl = panel.querySelector('#xa-ver');
-    if (verEl && ver) verEl.textContent = ver;
+    if (verEl && ver) verEl.textContent = ver + ' · ' + '__XA_BUILD__';
 
     mini = document.createElement('div');
     mini.id = 'xa-mini';
@@ -325,14 +388,16 @@ function makeDraggable(dragEl, handleEl) {
 }
 
 function bindUI() {
-    let aiScanTimer = null;
+    // AI 扫描挂心跳（gate 化启停，不再自管 interval）；开闸立即补一拍保持原响应速度
+    let aiScanOn = false;
+    xaHeartbeat(() => { XIA_AI.scan(); }, 3000, () => aiScanOn);
     function startAIScan() {
-        if (aiScanTimer) return;
+        if (aiScanOn) return;
+        aiScanOn = true;
         setTimeout(() => { XIA_AI.scan(); }, 500);
-        aiScanTimer = setInterval(() => { XIA_AI.scan(); }, 3000);
     }
     function stopAIScan() {
-        if (aiScanTimer) { clearInterval(aiScanTimer); aiScanTimer = null; }
+        aiScanOn = false;
     }
 
     const $ = s => panel.querySelector(s);
@@ -356,6 +421,19 @@ function bindUI() {
             tab.classList.add('active');
             const pane = panel.querySelector('[data-pane="' + tab.dataset.tab + '"]');
             if (pane) pane.classList.add('active');
+        });
+    });
+
+    // 抽屉折叠：节标题点击开合，状态持久化（默认全部展开；状态/进度/截止横幅与日志框不受影响常驻）
+    let drawerState = {};
+    try { drawerState = JSON.parse(GM_getValue(SK.drawers, '{}')) || {}; } catch (e) {}
+    qsa('.xa-drawer', panel).forEach(d => {
+        if (!d.dataset.sec) return;
+        if (drawerState[d.dataset.sec] === false) d.classList.add('closed');
+        d.querySelector('.xa-sec').addEventListener('click', () => {
+            d.classList.toggle('closed');
+            drawerState[d.dataset.sec] = !d.classList.contains('closed');
+            GM_setValue(SK.drawers, JSON.stringify(drawerState));
         });
     });
 
@@ -455,110 +533,60 @@ function bindUI() {
     });
     function refreshAISwitch() {
         if (conf.autoAnswer) {
-            autoSwitch.classList.add('on');
+            setSwitch(autoSwitch, true);
             XIA_AI.log('自动答题已开启（每 ' + CFG.INTERVAL + 's 扫描页面）', 'ok');
             startAIScan();
         } else {
-            autoSwitch.classList.remove('on');
+            setSwitch(autoSwitch, false);
             stopAIScan();
             XIA_AI.log('自动答题已关闭', 'info');
         }
         refreshMenuCommands();
     }
 
-    // 自动提交开关（默认关闭——影响真实成绩的高风险项，可在面板显式开启）
-    const submitSwitch = $('#xa-autosubmit-switch');
-    submitSwitch.addEventListener('click', () => {
-        conf.autoSubmit = !conf.autoSubmit;
-        GM_setValue(SK.autoSubmit, conf.autoSubmit);
-        refreshSubmitSwitch();
-    });
-    function refreshSubmitSwitch() {
-        if (conf.autoSubmit) {
-            submitSwitch.classList.add('on');
-            XIA_AI.log('答完自动提交已开启（有未答题会自动取消提交）', 'ok');
-        } else {
-            submitSwitch.classList.remove('on');
-            XIA_AI.log('答完自动提交已关闭', 'info');
-        }
+    // 提交方式下拉（三态合一，替代旧「答完自动提交/答题确认」两开关——二者本互斥，确认模式整体压过自动提交）
+    const submitModeSel = $('#xa-submit-mode');
+    function refreshSubmitMode(log) {
+        submitModeSel.value = conf.submitMode;
+        conf.autoSubmit = conf.submitMode === 'auto'; // 派生标志重算：qa/cruise/popup 的判断保持不动
+        conf.confirmAnswer = conf.submitMode === 'confirm';
+        if (log) XIA_AI.log(
+            conf.submitMode === 'auto' ? '答完自动提交已开启（有未答题会自动取消提交）'
+                : conf.submitMode === 'confirm' ? '答题确认已开启：AI 填完暂停，人工核对后自行翻题/提交（自动提交停用）'
+                    : '提交方式：人工核对提交（AI 答完自动翻题，最后由你点提交）',
+            conf.submitMode === 'manual' ? 'info' : 'ok'
+        );
     }
+    submitModeSel.addEventListener('change', () => {
+        conf.submitMode = submitModeSel.value;
+        GM_setValue(SK.submitMode, conf.submitMode);
+        refreshSubmitMode(true);
+    });
 
-    // 答题确认开关（默认关闭）：开启后 AI 填完暂停，人工核对后自行操作
-    const confirmSwitch = $('#xa-confirm-switch');
-    confirmSwitch.addEventListener('click', () => {
-        conf.confirmAnswer = !conf.confirmAnswer;
-        GM_setValue(SK.confirmAnswer, conf.confirmAnswer);
-        refreshConfirmSwitch();
+    // 简单开关统一绑定：点按翻转 conf 键落盘 + setSwitch 联动卡片绿底；
+    // 带副作用的开关（自动答题/自动刷课）与提交方式下拉单独绑定，不进这张表
+    [
+        ['xa-notify-switch', 'notify', '桌面通知已开启：页面在后台时提醒巡航完成/待人工/熔断/截止事件', '桌面通知已关闭'],
+        ['xa-speed-switch', 'speedBoost', '智能倍速已开启：对有倍速菜单的视频自动点最高档（≤2x）', '智能倍速已关闭'],
+        ['xa-eco-switch', 'videoEco', '降画质省性能已开启：之后打开的视频自动选最低画质档', '降画质省性能已关闭'],
+    ].forEach(([id, key, onMsg, offMsg]) => {
+        const el = $('#' + id);
+        el.addEventListener('click', () => {
+            conf[key] = !conf[key];
+            GM_setValue(SK[key], conf[key]);
+            setSwitch(el, conf[key]);
+            XIA_AI.log(conf[key] ? onMsg : offMsg, conf[key] ? 'ok' : 'info');
+        });
+        setSwitch(el, !!conf[key]); // 初始视觉同步（旧 refresh 函数会在启动日志里刷三条状态，现在只在真正切换时记日志）
     });
-    function refreshConfirmSwitch() {
-        if (conf.confirmAnswer) {
-            confirmSwitch.classList.add('on');
-            XIA_AI.log('答题确认已开启：AI 填完暂停，人工核对后自行翻题/提交（自动提交停用）', 'ok');
-        } else {
-            confirmSwitch.classList.remove('on');
-            XIA_AI.log('答题确认已关闭', 'info');
-        }
-    }
-
-    // 桌面通知开关（默认开启：纯本地能力，仅后台时弹，不弹也无害）
-    const notifySwitch = $('#xa-notify-switch');
-    notifySwitch.addEventListener('click', () => {
-        conf.notify = !conf.notify;
-        GM_setValue(SK.notify, conf.notify);
-        refreshNotifySwitch();
-    });
-    function refreshNotifySwitch() {
-        if (conf.notify) {
-            notifySwitch.classList.add('on');
-            XIA_AI.log('桌面通知已开启：页面在后台时提醒巡航完成/待人工/熔断/截止事件', 'ok');
-        } else {
-            notifySwitch.classList.remove('on');
-            XIA_AI.log('桌面通知已关闭', 'info');
-        }
-    }
-
-    // 暗色护眼开关：切 html.xa-dark 类（样式常驻注入，见 utils.xaDarkModeCSS）
-    const darkSwitch = $('#xa-dark-switch');
-    darkSwitch.addEventListener('click', () => {
-        conf.darkMode = !conf.darkMode;
-        GM_setValue(SK.darkMode, conf.darkMode);
-        xaApplyDarkMode();
-        refreshDarkSwitch();
-    });
-    function refreshDarkSwitch() {
-        if (conf.darkMode) {
-            darkSwitch.classList.add('on');
-            XIA_AI.log('暗色护眼已开启：浅色变量/硬编码背景已覆盖，漏网区域欢迎截图反馈', 'ok');
-        } else {
-            darkSwitch.classList.remove('on');
-            XIA_AI.log('暗色护眼已关闭', 'info');
-        }
-    }
-
-    // 降画质省性能开关：新视频自动选最低画质档（见 utils.xaApplyVideoEco）
-    const ecoSwitch = $('#xa-eco-switch');
-    ecoSwitch.addEventListener('click', () => {
-        conf.videoEco = !conf.videoEco;
-        GM_setValue(SK.videoEco, conf.videoEco);
-        refreshEcoSwitch();
-    });
-    function refreshEcoSwitch() {
-        if (conf.videoEco) {
-            ecoSwitch.classList.add('on');
-            XIA_AI.log('降画质省性能已开启：之后打开的视频自动选最低画质档', 'ok');
-        } else {
-            ecoSwitch.classList.remove('on');
-            XIA_AI.log('降画质省性能已关闭', 'info');
-        }
-    }
 
     // 挂机开关：独立控制主循环
     function refreshPlaySwitch() {
         if (conf.autoPlay) {
-            playSwitch.classList.add('on');
+            setSwitch(playSwitch, true);
             startAuto();
         } else {
-            playSwitch.classList.remove('on');
+            setSwitch(playSwitch, false);
             stopAuto();
         }
         refreshMenuCommands();
@@ -641,10 +669,6 @@ function bindUI() {
     XIA_AI.bump(); // 初始化统计显示
     refreshPlaySwitch();
     refreshAISwitch();
-    refreshSubmitSwitch();
-    refreshConfirmSwitch();
-    refreshNotifySwitch();
-    refreshDarkSwitch();
-    refreshEcoSwitch();
+    refreshSubmitMode(false); // 下拉与派生标志对齐（loadCfg 已迁移旧键，这里不重复记日志）
     refreshMenuCommands(); // 按当前开关状态挂油猴菜单（环境不支持时内部静默跳过）
 }

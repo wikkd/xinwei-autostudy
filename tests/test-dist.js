@@ -50,6 +50,8 @@ const MUST = [
     '.el-header .course-name', '.title-class', '.homework-describe', 'input[type="file"]',
     // 存储键（GM）
     'xa_unlock_watch_at', 'xa_confirm_answer', 'xa_deadline_summary',
+    // 批 13 合并简化：提交方式三态（旧双开关迁移）+ 视频优化统一入口（函数名被 terser 改写，入口行为由 test-qa 锁定）
+    'xa_submit_mode', '提交方式',
     // 视频内弹题（popup.js，chunk 逆向 DOM 契约）
     '.popup-topic-dialog', '.option-item', 'icon-close', '弹题',
     // 作业截止提醒（deadline.js，接口契约沿用 harvest 真机校准配方）
@@ -62,9 +64,10 @@ const MUST = [
     'xa-anim-freeze', 'animation-duration:0.01ms', 'animation-iteration-count:1',
     // 竖屏适配（utils.xaPortraitCSS，≤1199px 解锁 min-width 硬墙）
     'xa-portrait-css', '@media (max-width:1199px){', 'min-width:0!important',
-    // 批 9：暗色护眼 / 降画质省性能 / 草稿防丢 / 防误关
-    'xa_dark_mode', 'xa_video_eco', 'xa_drafts', 'xa-dark-css', 'beforeunload',
-    '暗色护眼', '降画质省性能', '已恢复本地草稿', '作业/考试内容可能未提交',
+    // 批 9：降画质省性能 / 草稿防丢 / 防误关；批 13：智能倍速（平台菜单白名单内自动最高档）
+    'xa_video_eco', 'xa_drafts', 'beforeunload',
+    '降画质省性能', '已恢复本地草稿', '作业/考试内容可能未提交',
+    'xa_speed_boost', 'xa_speed_reject_at', '智能倍速', 'vjs-playback-rate',
     // 批 11：面板屏幕适配（窄视口宽度/高度自适应、旋转恢复钳制、触屏拖拽）
     'min(300px, calc(100vw - 20px))', 'min(640px, calc(100vh - 110px))', 'orientationchange', 'touchstart',
     // UI 文案（面板/日志/提交安全）

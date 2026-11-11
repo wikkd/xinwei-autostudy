@@ -73,9 +73,14 @@ window.eval(FILES.map(f => fs.readFileSync(path.join(SRC, f), 'utf8')).join('\n'
     unloadHandler: _xaUnloadHandler,
     unloadState: () => _xaUnloadOn,
     eco: xaApplyVideoEco,
-    darkCSS: xaDarkModeCSS,
-    darkApply: xaApplyDarkMode,
+    speed: xaApplySpeedBoost,
+    tweaks: xaApplyVideoTweaks,
+    sk: SK,
     clamp: xaClampToViewport,
+    heart: xaHeartbeat,
+    heartTick: xaHeartTick,
+    heartTasks: _xaHeartTasks,
+    progressBlocked: xaProgressBlocked,
 };`);
 window.loadCfg(); // 必须在解构前：loadCfg 会整体重赋值 conf，之后 getter 才返回最终对象
 const { conf, ai: XIA_AI, tools: XA_TOOLS, markerTick, resetMarker } = window.__T;
@@ -836,6 +841,8 @@ function codeChoiceFixture(id) {
     ok('草稿：容量收敛到 20 且剔除过期', Object.keys(kept).length === 20 && !kept.old);
 
     // 巡检：非空编辑器保存；live 清空不恢复；刷新恢复 + 草稿删除
+    // （巡检带路由闸：编辑器只认作业/考试路由，须先落 hash）
+    window.location.hash = '#/homeworkDetailPage';
     window.document.body.innerHTML =
         '<div class="homework-question-editor x1"><span class="topic-title">论述题A</span>'
         + '<div class="w-e-text-container"><div contenteditable="true">第一段内容足够长不误判</div></div></div>';
@@ -885,23 +892,8 @@ function codeChoiceFixture(id) {
     window.location.hash = '';
 }
 
-// ===== ㉗ 暗色护眼 + 降画质省性能 =====
+// ===== ㉗ 降画质省性能 + 智能倍速 =====
 {
-    window.__T.darkCSS();
-    window.__T.darkCSS(); // 幂等
-    eq('暗色：重复注入只保留一份', window.document.querySelectorAll('#xa-dark-css').length, 1);
-    const dcss = window.document.getElementById('xa-dark-css').textContent || '';
-    ok('暗色：EP 变量 + html.xa-dark 作用域', dcss.indexOf('html.xa-dark{--el-bg-color:') === 0 && dcss.indexOf('--el-bg-color-page:') >= 0);
-    ok('暗色：不 filter 反转（视频/图片原样）', dcss.indexOf('filter') < 0);
-
-    window.__T.conf.darkMode = false;
-    window.__T.darkApply();
-    ok('暗色：关=html 无 xa-dark 类', !window.document.documentElement.classList.contains('xa-dark'));
-    window.__T.conf.darkMode = true;
-    window.__T.darkApply();
-    ok('暗色：开=html 挂 xa-dark 类', window.document.documentElement.classList.contains('xa-dark'));
-    window.__T.conf.darkMode = false;
-
     // 降画质：qualityLevels 探测 → 选最低码率档；关闭时不动作；幂等标记
     const mkV = () => {
         const ls = { length: 3, 0: { bitrate: 3000, height: 1080, enabled: false }, 1: { bitrate: 500, height: 360, enabled: false }, 2: { bitrate: 1500, height: 720, enabled: false } };
@@ -921,6 +913,121 @@ function codeChoiceFixture(id) {
     window.__T.eco(v);
     ok('降画质：空档位列表不锁 done（下次事件重试）', v.__xaEcoDone !== true);
     window.__T.conf.videoEco = false;
+
+    // 智能倍速：以平台菜单为准点最高档（>2x 硬上限）；无菜单=不允许不碰；风控拒绝 30 分钟冷却
+    const mkRateV = (rates, nativeSet) => {
+        const wrap = window.document.createElement('div');
+        wrap.className = 'video-js';
+        const v = window.document.createElement('video');
+        wrap.appendChild(v);
+        let cur = 1, clicks = 0;
+        v.player = { playbackRate: r => { if (r != null) { cur = r; return r; } return cur; } };
+        if (rates) {
+            const btn = window.document.createElement('button');
+            btn.className = 'vjs-playback-rate';
+            const menu = window.document.createElement('div');
+            menu.className = 'vjs-menu';
+            rates.forEach(r => {
+                const it = window.document.createElement('div');
+                it.className = 'vjs-menu-item';
+                it.textContent = r + 'x';
+                if (r === nativeSet) it.addEventListener('click', () => { clicks++; cur = r; });
+                menu.appendChild(it);
+            });
+            btn.appendChild(menu);
+            wrap.appendChild(btn);
+        }
+        return { v: v, get: () => cur, clicks: () => clicks };
+    };
+    window.__T.conf.speedBoost = true;
+    let sv = mkRateV([2, 1.75, 1.5, 1.25, 1, 0.75, 0.5], 2);
+    window.__T.speed(sv.v);
+    ok('智能倍速：走平台菜单点最高档', sv.get() === 2 && sv.clicks() === 1 && sv.v.__xaSpeedDone === true);
+    sv = mkRateV([4, 2, 1]); // 假设出现 >2x 档位
+    window.__T.speed(sv.v);
+    ok('智能倍速：>2x 档位硬上限截到 2x', sv.get() === 2 && sv.v.__xaSpeedDone === true);
+    sv = mkRateV([2, 1, 0.5]); // 菜单项无点击监听 → 平台点击未生效
+    window.__T.speed(sv.v);
+    ok('智能倍速：菜单点击无效时 API 兜底', sv.get() === 2);
+    sv = mkRateV();
+    window.__T.speed(sv.v);
+    ok('智能倍速：无菜单=不允许，不碰 rate', sv.get() === 1 && sv.v.__xaSpeedDone === true);
+    sv = mkRateV([0.5, 1]);
+    window.__T.speed(sv.v);
+    ok('智能倍速：档位全 ≤1x 不动作', sv.get() === 1 && sv.v.__xaSpeedDone === true);
+    sv = mkRateV([2, 1], 2);
+    sv.v.player.playbackRate(2);
+    window.__T.speed(sv.v);
+    ok('智能倍速：已达标不再动', sv.clicks() === 0 && sv.v.__xaSpeedDone === true);
+    window.__T.conf.speedBoost = false;
+    sv = mkRateV([2, 1], 2);
+    window.__T.speed(sv.v);
+    ok('智能倍速：关闭时不动作', sv.get() === 1 && sv.v.__xaSpeedDone !== true);
+    window.__T.conf.speedBoost = true;
+    window.GM_setValue(window.__T.sk.speedRejectAt, Date.now());
+    sv = mkRateV([2, 1], 2);
+    window.__T.speed(sv.v);
+    ok('智能倍速：风控拒绝后 30 分钟内不再尝试', sv.get() === 1 && sv.v.__xaSpeedDone !== true);
+    window.GM_setValue(window.__T.sk.speedRejectAt, Date.now() - 3600000);
+    sv = mkRateV([2, 1], 2);
+    window.__T.speed(sv.v);
+    ok('智能倍速：冷却过期恢复尝试', sv.get() === 2);
+    window.__T.conf.speedBoost = false;
+    window.GM_setValue(window.__T.sk.speedRejectAt, 0);
+
+    // 统一入口 xaApplyVideoTweaks：一次 player 解析路由两个子功能；双开/单开/未就绪/双关语义
+    const mkLS = () => ({ length: 2, 0: { bitrate: 3000, height: 1080, enabled: false }, 1: { bitrate: 500, height: 360, enabled: false } });
+    window.__T.conf.videoEco = true;
+    window.__T.conf.speedBoost = true;
+    const tv = mkRateV([2, 1], 2);
+    const lsA = mkLS();
+    tv.v.player.qualityLevels = () => lsA; // player 同时具备两套接口
+    window.__T.tweaks(tv.v);
+    ok('统一入口：双开=画质与倍速各走各的标记', tv.v.__xaEcoDone === true && tv.v.__xaSpeedDone === true && tv.get() === 2 && lsA[1].enabled === true);
+    window.__T.conf.speedBoost = false;
+    const lsB = mkLS();
+    const tv2 = { player: { qualityLevels: () => lsB } }; // 仅 eco 开：只走画质
+    window.__T.tweaks(tv2);
+    ok('统一入口：单开 eco=倍速标记不上', tv2.__xaEcoDone === true && tv2.__xaSpeedDone !== true);
+    window.__T.conf.videoEco = false;
+    window.__T.conf.speedBoost = true;
+    const tv3 = mkRateV([2, 1], 2);
+    delete tv3.v.player; // player 未就绪：入口直接短路，两标记都不上（后续事件再兜底）
+    window.__T.tweaks(tv3.v);
+    ok('统一入口：无 player 短路不锁标记', tv3.v.__xaEcoDone !== true && tv3.v.__xaSpeedDone !== true);
+    window.__T.conf.videoEco = false;
+    window.__T.conf.speedBoost = false;
+    const tv4 = mkRateV([2, 1], 2);
+    window.__T.tweaks(tv4.v);
+    ok('统一入口：双关=完全不动作', tv4.v.__xaEcoDone !== true && tv4.v.__xaSpeedDone !== true && tv4.get() === 1);
+}
+
+// ===== ㉙ 心跳调度：注册排期 / gate / 异常隔离 / now 注入 =====
+{
+    const T = window.__T;
+    const ran = [];
+    T.heart(() => ran.push('a'), 5000);
+    T.heart(() => ran.push('b'), 3000, () => false); // gate 恒假
+    T.heart(() => { throw new Error('boom'); }, 1000); // 异常任务
+    T.heart(() => ran.push('d'), 1000); // 异常不得影响后续任务
+    const t0 = Date.now();
+    T.heartTick(t0); // 注册即排期（next=注册时+period）：此刻全部未到期
+    ok('心跳：未到期不触发', ran.length === 0);
+    T.heartTick(t0 + 60000); // 一次性推进到全部到期
+    ok('心跳：到期触发 + gate 拦截 + 异常隔离', ran.indexOf('a') >= 0 && ran.indexOf('d') >= 0 && ran.indexOf('b') < 0);
+    const n = ran.length;
+    T.heartTick(t0 + 60000); // 同一时刻再 tick：next 已推进到未来，不重复触发
+    ok('心跳：同刻不重复触发', ran.length === n);
+}
+
+// ===== ㉚ 进度行保护前缀：单一来源判定（批 12 回归锁定）=====
+{
+    const B = window.__T.progressBlocked;
+    ok('守卫：等待前缀受保护', B('等待答题间隔 5s') && B('等待章节解锁（10:00）') && B('等待章节解锁（无时间表），守望停止'));
+    ok('守卫：待人工前缀受保护', B('待人工确认：答案已填入') && B('待人工确认：弹题已填') && B('待人工处理：图片题已跳过'));
+    ok('守卫：配置错误前缀受保护', B('配置错误，已暂停'));
+    ok('守卫：待机中不被误伤（裸「待」判定回归）', !B('待机中'));
+    ok('守卫：常规进度可覆盖', !B('课程进度 3/20 节') && !B('1.1 播放器 · 已观看 45%') && !B('已答 3 题') && !B(''));
 }
 
 // ===== ㉘ 面板屏幕适配：视口位置钳制纯函数 =====
@@ -934,6 +1041,43 @@ function codeChoiceFixture(id) {
     ok('适配：负坐标收 0', r3.x === 0 && r3.y === 0);
     const r4 = C(10, 10, 3000, 4000, 1280, 800);
     ok('适配：元素大于视口贴原点', r4.x === 0 && r4.y === 0);
+}
+
+// ===== ㉛ 提交方式三态：loadCfg 迁移旧双开关（confirm 优先）+ 派生标志同步 =====
+{
+    const S = window.__T.sk;
+    window.GM_setValue(S.autoSubmit, 'true'); // 旧键：仅自动提交开
+    window.GM_setValue(S.confirmAnswer, '');
+    delete store[S.submitMode]; // 清掉启动 loadCfg 已写入的新键，模拟旧版升级
+    window.loadCfg();
+    eq('提交方式迁移：auto', window.__T.conf.submitMode, 'auto');
+    eq('提交方式派生：autoSubmit', window.__T.conf.autoSubmit, true);
+    eq('提交方式派生：confirmAnswer', window.__T.conf.confirmAnswer, false);
+
+    window.GM_setValue(S.autoSubmit, 'true');
+    window.GM_setValue(S.confirmAnswer, 'true'); // 旧版双开：确认模式整体压过自动提交 → confirm
+    delete store[S.submitMode];
+    window.loadCfg();
+    eq('提交方式迁移：双开 confirm 优先', window.__T.conf.submitMode, 'confirm');
+
+    window.GM_setValue(S.autoSubmit, 'false');
+    window.GM_setValue(S.confirmAnswer, 'false');
+    delete store[S.submitMode];
+    window.loadCfg();
+    eq('提交方式迁移：双关 manual', window.__T.conf.submitMode, 'manual');
+
+    window.GM_setValue(S.submitMode, 'confirm'); // 已迁移后以新键为准，旧键改动不再影响
+    window.GM_setValue(S.autoSubmit, 'true');
+    window.GM_setValue(S.confirmAnswer, '');
+    window.loadCfg();
+    eq('提交方式：submitMode 优先于旧键', window.__T.conf.submitMode, 'confirm');
+
+    window.GM_setValue(S.submitMode, 'manual'); // 清场：派生标志随三态归位
+    window.GM_setValue(S.autoSubmit, '');
+    window.GM_setValue(S.confirmAnswer, '');
+    window.loadCfg();
+    eq('提交方式：清场回 manual', window.__T.conf.submitMode, 'manual');
+    eq('提交方式派生：manual 双标志皆假', window.__T.conf.autoSubmit === false && window.__T.conf.confirmAnswer === false, true);
 }
 
 console.log(fail ? ('\n' + fail + ' FAILED / ' + (pass + fail)) : ('✅ ' + pass + '/' + (pass + fail) + ' qa state-machine tests passed'));

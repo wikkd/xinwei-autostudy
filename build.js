@@ -26,8 +26,8 @@ function tryMinify(body) {
         return body;
     }
     const res = terser.minify_sync(body, {
-        compress: { passes: 2, ecma: 2020 },
-        mangle: { toplevel: false },   // 无顶层泄漏（全部逻辑在 IIFE 内）；日志文案为字符串不受影响
+        compress: { passes: 3, ecma: 2020 },
+        mangle: { toplevel: true },    // 顶层函数名也混淆（无字符串调用/Function.name 依赖，已验证）；字符串文案不受影响
         format: { comments: false, max_line_len: 300 },
     });
     if (!res || res.error) throw new Error('terser 压缩失败: ' + (res && res.error));
@@ -88,7 +88,13 @@ function slim(code) {
 function makeBundle(minify) {
     const meta = read(path.join(SRC_DIR, 'meta.js')).trimEnd();
     const version = extractVersion(meta);
-    const parts = BODY_ORDER.map(f => slim(read(path.join(SRC_DIR, f))).replace(/__XA_VERSION__/g, version));
+    // 构建戳：MMDD-HHMM，让「同一 @version 的多次本地构建」肉眼可辨（安装验证用，不参与更新通道）
+    const now = new Date();
+    const p2 = n => (n < 10 ? '0' : '') + n;
+    const build = String(now.getMonth() + 1).padStart(2, '0') + p2(now.getDate()) + '-' + p2(now.getHours()) + p2(now.getMinutes());
+    const parts = BODY_ORDER.map(f => slim(read(path.join(SRC_DIR, f)))
+        .replace(/__XA_VERSION__/g, version)
+        .replace(/__XA_BUILD__/g, build));
     let bundle = [
         meta,
         '',
@@ -100,7 +106,9 @@ function makeBundle(minify) {
     ].join('\n');
 
     // 构建期自检：占位符必须全部替换（防新文件漏加替换逻辑）
-    if (bundle.includes('__XA_VERSION__')) throw new Error('版本占位符 __XA_VERSION__ 替换失败');
+    if (bundle.includes('__XA_VERSION__') || bundle.includes('__XA_BUILD__')) {
+        throw new Error('占位符替换失败：__XA_VERSION__ / __XA_BUILD__ 残留');
+    }
 
     const rawKb = Buffer.byteLength(bundle, 'utf8') / 1024;
     if (minify) {

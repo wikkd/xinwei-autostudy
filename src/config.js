@@ -27,15 +27,19 @@ const CFG = {
 // 持久化键（GM_setValue / GM_getValue）
 const SK = {
     apiKey: 'xa_apikey', apiBase: 'xa_apibase', model: 'xa_model',
-    autoAnswer: 'xa_autoanswer', autoPlay: 'xa_autoplay', autoSubmit: 'xa_autosubmit',
-    confirmAnswer: 'xa_confirm_answer', // 答题确认模式：AI 填完暂停，人工核对后自行跳题/提交
+    autoAnswer: 'xa_autoanswer', autoPlay: 'xa_autoplay',
+    submitMode: 'xa_submit_mode', // 提交方式三态（manual/auto/confirm），替代旧 autoSubmit+confirmAnswer 两开关（二者本互斥）
+    autoSubmit: 'xa_autosubmit',        // 旧键仅作迁移读取：无 submitMode 时 auto=true 迁移为 auto
+    confirmAnswer: 'xa_confirm_answer', // 旧键仅作迁移读取：confirm=true 优先（旧版确认模式整体压过自动提交）
     notify: 'xa_notify',        // 桌面通知开关（页面在后台时弹系统通知，前台不打扰）
     searchMode: 'xa_search_mode',
     schedule: 'xa_schedule',    // 运行时段表 HH:MM-HH:MM（可跨零点；空=全天），时段外自动刷课/答题暂停
     visionModel: 'xa_vision_model', // 视觉模型（选填）：题干带图时改走该模型看图作答；空=不带图纯文本作答
-    darkMode: 'xa_dark_mode',   // 暗色/护眼模式：html.xa-dark 类 + 平台浅色变量/硬编码背景覆盖
     videoEco: 'xa_video_eco',   // 降画质省性能：每个视频自动选最低画质档（降解码 CPU 与带宽）
+    speedBoost: 'xa_speed_boost',     // 智能倍速：有平台倍速菜单（0.5x-2x）的视频自动点最高档，>2x 永不
+    speedRejectAt: 'xa_speed_reject_at', // 智能倍速被风控拒绝（不允许倍速播放）的时间戳：30 分钟冷却防刷新循环
     panelPos: 'xa_panel_pos',   // 面板/迷你球拖动位置
+    drawers: 'xa_drawers',      // 面板抽屉折叠状态（data-sec → 是否展开，JSON）
     minimized: 'xa_minimized',  // 面板是否处于最小化
     lastReload: 'xa_last_reload_at', // 异常弹窗自动刷新的冷却时间戳
     unlockWatch: 'xa_unlock_watch_at', // 章节解锁守望：到点静默刷新复查开放状态的时间戳
@@ -51,23 +55,31 @@ let conf = {};
 function loadCfg() {
     const g = (k, d) => GM_getValue(k, d);
     const b = v => v === true || v === 'true';
+    // 提交方式三态合一：manual=人工核对提交 / auto=答完自动提交 / confirm=填完暂停待确认。
+    // 旧版两开关（autoSubmit+confirmAnswer）迁移：confirm 优先——旧版里确认模式本就整体压过自动提交；
+    // 迁移结果写回 submitMode 后旧键不再读，qa/cruise/popup 的 conf.autoSubmit/conf.confirmAnswer 改为派生标志不动。
+    let submitMode = String(g(SK.submitMode, '') || '');
+    if (submitMode !== 'auto' && submitMode !== 'confirm' && submitMode !== 'manual') {
+        submitMode = b(g(SK.confirmAnswer, false)) ? 'confirm' : (b(g(SK.autoSubmit, false)) ? 'auto' : 'manual');
+        GM_setValue(SK.submitMode, submitMode);
+    }
     conf = {
         apiKey: g(SK.apiKey, ''),
         apiBase: g(SK.apiBase, CFG.DEFAULT_API_BASE),
         model: g(SK.model, CFG.DEFAULT_MODEL),
         autoAnswer: b(g(SK.autoAnswer, false)),
         autoPlay: b(g(SK.autoPlay, false)),
-        // 默认关闭：自动提交影响真实成绩，属高风险项
-        autoSubmit: b(g(SK.autoSubmit, false)),
-        // 默认关闭：开启后 AI 填完答案即暂停，人工核对后自行翻题/提交
-        confirmAnswer: b(g(SK.confirmAnswer, false)),
+        submitMode,
+        // 派生标志：与 submitMode 恒同步（ui.js 切换时一并重算），下游判断不用改
+        autoSubmit: submitMode === 'auto',
+        confirmAnswer: submitMode === 'confirm',
         // 默认开启：本地系统通知（无网络外发），仅页面在后台时弹，面板可关
         notify: b(g(SK.notify, true)),
         answerDelay: String(g(SK.answerDelay, '0')),
         searchMode: g(SK.searchMode, CFG.DEFAULT_SEARCH_MODE),
         schedule: String(g(SK.schedule, '')).trim(),
         visionModel: String(g(SK.visionModel, '')).trim(),
-        darkMode: b(g(SK.darkMode, false)),
         videoEco: b(g(SK.videoEco, false)),
+        speedBoost: b(g(SK.speedBoost, false)),
     };
 }

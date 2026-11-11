@@ -374,9 +374,9 @@ function installVideoHooks() {
         if (!v || v.__xaHooked) return;
         v.__xaHooked = true;
         v.addEventListener('ended', () => scheduleTick(300));          // 放完 → 立即走完成判定/跳章
-        v.addEventListener('loadedmetadata', () => { xaApplyVideoEco(v); scheduleTick(500); }); // 新节新源 → 尽快催播
-        v.addEventListener('play', () => scheduleTick(1500));          // 开始播放 → 刷新卡死基准
-        xaApplyVideoEco(v); // 降画质省性能：已有源立即应用（loadedmetadata 再兜底一次）
+        v.addEventListener('loadedmetadata', () => { xaApplyVideoTweaks(v); scheduleTick(500); }); // 新节新源 → 尽快催播（降画质/倍速见 utils.xaApplyVideoTweaks）
+        v.addEventListener('play', () => { xaApplyVideoTweaks(v); scheduleTick(1500); });          // 开始播放 → 刷新卡死基准；画质/倍速兜底
+        xaApplyVideoTweaks(v); // 降画质/智能倍速：已有源立即应用（loadedmetadata 再兜底一次）
     };
     document.querySelectorAll('video').forEach(hook);
     // SPA 换节会频繁重建播放器 DOM；rAF 合并一帧内的全部新增节点再挂载（挂机外零开销）
@@ -456,12 +456,11 @@ function mainTick() {
         const vid = watchingVideo();
         const pct = vid && vid.duration > 0 ? Math.floor(vid.currentTime / vid.duration * 100) : null;
         console.log('[芯位] #' + tick + ' | 当前: "' + cur + '"' + (pct != null ? ' | 已观看 ' + pct + '%' : '') + ' | cd=' + cd + 's | 连跳=' + consecutiveJumps);
-        // 面板进度：仅在答题/扫描/配置告警/确认等待闲置时由挂机更新（避免覆盖「等待…/待人工…/配置错误…」
-        // 等关键信息；不能用裸「待」判定——初始文本「待机中」会被误当保护行，挂机进度从此不再刷新）
+        // 面板进度：仅在答题/扫描/配置告警/确认等待闲置时由挂机更新（关键前缀判定单一来源
+        // 见 utils.xaProgressBlocked——裸「待」判定会误伤初始文本「待机中」，批 12 实锤）
         const pel = document.getElementById('xa-progress');
         const ptxt = pel ? (pel.textContent || '') : '';
-        if (!XIA_AI.answering && !XIA_AI.answeringOnce && !XIA_AI._cfgError
-            && ptxt.indexOf('等待') !== 0 && ptxt.indexOf('待人工') !== 0 && ptxt.indexOf('配置错误') !== 0) {
+        if (!XIA_AI.answering && !XIA_AI.answeringOnce && !XIA_AI._cfgError && !xaProgressBlocked(ptxt)) {
             XIA_AI.progress(cur + (pct != null ? ' · 已观看 ' + pct + '%' : ''));
         }
     }

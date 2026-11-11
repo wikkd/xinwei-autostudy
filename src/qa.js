@@ -76,11 +76,20 @@ const XIA_AI = {
         if (XIA_AI.logLines.length > 200) XIA_AI.logLines.shift();
         const box = document.getElementById('xa-ai-log');
         if (box) {
-            box.innerHTML = XIA_AI.logLines.slice(-60).map(l => {
-                const col = l.type === 'error' ? '#dc2626' : l.type === 'ok' ? '#059669' : l.type === 'ai' ? '#7c3aed' : '#374151';
-                // & 必须先于 < 转义，否则自己插入的 &lt; 会被二次转义
-                return '<div style="color:' + col + ';line-height:1.55;">' + l.text.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</div>';
-            }).join('');
+            // 增量渲染：只 append 新行并裁剪 60 行窗口（巡航答题时每题数条日志，
+            // 全量 innerHTML 重建是纯浪费）。清空/面板重建后 _xaLive 失位则重建一次。
+            // textContent 赋值自动转义 &/<，无需手工 escape。
+            if (!box._xaLive) {
+                box.innerHTML = '';
+                box._xaLive = true;
+            } else {
+                while (box.children.length >= 60) box.removeChild(box.firstChild);
+            }
+            const div = document.createElement('div');
+            div.style.color = type === 'error' ? '#dc2626' : type === 'ok' ? '#059669' : type === 'ai' ? '#7c3aed' : '#374151';
+            div.style.lineHeight = '1.55';
+            div.textContent = line;
+            box.appendChild(div);
             box.scrollTop = box.scrollHeight;
         }
         console.log('[XIA] ' + msg);
